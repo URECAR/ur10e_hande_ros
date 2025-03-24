@@ -1,0 +1,59 @@
+<?xml version="1.0"?>
+<robot name="ur10e_robotiq_hande" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!-- UR10e 로봇 매크로 불러오기 -->
+  <xacro:include filename="$(find ur_description)/urdf/inc/ur10e_macro.xacro"/>
+  
+  <!-- Robotiq Hand-E 그리퍼 매크로 불러오기 -->
+  <xacro:include filename="$(find robotiq_hande_description)/urdf/robotiq_hande_gripper.xacro"/>
+  
+  <!-- 필요한 상수 정의 -->
+  <xacro:property name="pi" value="3.1415926535897931"/>
+  
+  <!-- UR10e 로봇 생성 -->
+  <xacro:ur10e_robot prefix="" />
+  
+  <!-- Robotiq Hand-E 그리퍼 생성 및 연결 -->
+  <xacro:robotiq_hande_gripper 
+    name="robotiq_hande" 
+    prefix="gripper_" 
+    parent="tool0" 
+    tty="/dev/ttyUSB0" 
+    use_fake_hardware="true" />
+
+  <!-- Hande 그리퍼 조인트를 위한 Transmission 추가 -->
+  <transmission name="gripper_robotiq_hande_left_finger_trans">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="gripper_robotiq_hande_left_finger_joint">
+      <hardwareInterface>hardware_interface::PositionJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="gripper_robotiq_hande_left_finger_motor">
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  
+  <transmission name="gripper_robotiq_hande_right_finger_trans">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="gripper_robotiq_hande_right_finger_joint">
+      <hardwareInterface>hardware_interface::PositionJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="gripper_robotiq_hande_right_finger_motor">
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  
+  <!-- 누락된 gazebo 태그 추가 - Mimic 조인트 설정 -->
+  <gazebo>
+    <plugin name="gazebo_ros_control" filename="libgazebo_ros_control.so">
+      <robotNamespace>/</robotNamespace>
+    </plugin>
+  </gazebo>
+  
+  <gazebo>
+    <plugin name="mimic_plugin" filename="libgazebo_mimic_plugin.so">
+      <joint>gripper_robotiq_hande_left_finger_joint</joint>
+      <mimicJoint>gripper_robotiq_hande_right_finger_joint</mimicJoint>
+      <multiplier>1.0</multiplier>
+      <offset>0.0</offset>
+    </plugin>
+  </gazebo>
+</robot>

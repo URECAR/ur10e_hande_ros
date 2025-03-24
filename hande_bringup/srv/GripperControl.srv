@@ -1,0 +1,16 @@
+# Service to control the gripper
+uint8 POSITION=0
+uint8 SPEED=1
+uint8 FORCE=2
+uint8 ACTIVATE=3
+uint8 DEACTIVATE=4
+uint8 EMERGENCY_RELEASE=5
+uint8 STOP=6
+
+# Request
+uint8 command_type    # Command type (see constants above)
+uint8 value           # Value for position/speed/force (0-255)
+---
+# Response
+bool success          # Success flag
+string message        # Success or error message

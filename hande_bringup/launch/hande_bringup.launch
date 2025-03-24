@@ -1,0 +1,40 @@
+<launch>
+  <!-- Hand-E 그리퍼 드라이버 노드 실행 -->
+  <arg name="use_cpp_driver" default="false" doc="파이썬 대신 C++ 드라이버 사용 여부"/>
+  <arg name="sim" default="true" doc="시뮬레이션 모드 여부"/>
+  <arg name="mode" default="virtual" doc="실행 모드 (virtual/real)"/>
+  <arg name="port" default="/dev/ttyUSB0" doc="실제 그리퍼 연결 시리얼 포트"/>
+  
+  <!-- 파라미터 설정 -->
+  <param name="simulate_object_detection" type="bool" value="$(eval mode == 'virtual')"/>
+  <param name="gripper_mode" type="string" value="$(arg mode)"/>
+  <param name="gripper_port" type="string" value="$(arg port)" if="$(eval mode == 'real')"/>
+  
+  <!-- 드라이버 노드 선택 -->
+  <group if="$(arg use_cpp_driver)">
+    <node name="hande_gripper_driver" pkg="hande_bringup" type="hande_driver_node" output="screen">
+      <param name="mode" value="$(arg mode)"/>
+      <param name="port" value="$(arg port)" if="$(eval mode == 'real')"/>
+    </node>
+  </group>
+  <group unless="$(arg use_cpp_driver)">
+    <node name="hande_gripper_driver" pkg="hande_bringup" type="hande_driver.py" output="screen">
+      <param name="mode" value="$(arg mode)"/>
+      <param name="port" value="$(arg port)" if="$(eval mode == 'real')"/>
+    </node>
+  </group>
+  
+  <!-- URDF에 대한 robot_state_publisher 실행 -->
+  <param name="robot_description" textfile="$(find ur10e_hande_moveit_config)/urdf/ur10e_robotiq_hande.urdf" />
+  <node name="gripper_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher">
+    <!-- 그리퍼 관련 조인트만 발행하도록 설정 -->
+    <rosparam param="source_list">[/gripper_joint_states]</rosparam>
+    <rosparam param="ignore_timestamp">true</rosparam>
+    <remap from="/tf" to="/tf_ignore"/>  <!-- 실제 TF 트리에 발행하지 않음 -->
+    <remap from="/tf_static" to="/tf_static_gripper"/>  <!-- 별도의 정적 TF 토픽 사용 -->
+  </node>
+  
+  <!-- 조인트 상태 연결 -->
+  <node pkg="topic_tools" type="relay" name="gripper_joint_relay"
+        args="/hande_gripper/joint_state /joint_states/gripper_robotiq_hande_left_finger_joint" />
+</launch>

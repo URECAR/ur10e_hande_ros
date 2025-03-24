@@ -1,0 +1,24 @@
+<launch>
+  <!-- 인자 정의 -->
+  <arg name="robot_ip" doc="IP 주소 of the robot"/>
+  <arg name="sim" default="false" doc="시뮬레이션 모드 여부"/>
+  <arg name="mode" default="virtual" doc="그리퍼를 스폰하는 가상그리퍼 생성 / 실제 그리퍼에 연결"/>
+  <!-- UR10e 로봇 런치 파일 포함 -->
+  <include file="$(find ur_robot_driver)/launch/ur10e_bringup.launch">
+    <arg name="robot_ip" value="$(arg robot_ip)" />
+    <!-- UR 로봇 드라이버에서 limited 인자를 제거 -->
+    <arg name="use_tool_communication" value="true" />
+  </include>
+
+  <!-- Hand-E 그리퍼 런치 파일 포함 -->
+  <include file="$(find hande_bringup)/launch/hande_bringup.launch">
+    <arg name="sim" value="$(arg sim)" if="$(arg sim)"/>
+    <arg name="mode" value="$(arg mode)"/> 
+  </include>
+  
+  <!-- Rviz 실행 (시각화) -->
+  <node name="rviz" pkg="rviz" type="rviz" args="-d $(find hande_bringup)/launch/ur10e_hande.rviz" required="true" 
+        if="$(arg sim)"/>
+
+
+</launch>

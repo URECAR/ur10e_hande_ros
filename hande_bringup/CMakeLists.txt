@@ -1,5 +1,3 @@
-# CMakeLists.txt 수정
-cat > ~/catkin_ws/src/hande_bringup/CMakeLists.txt << 'EOF'
 cmake_minimum_required(VERSION 3.0.2)
 project(hande_bringup)
 
@@ -46,4 +44,3 @@ catkin_install_python(PROGRAMS
   scripts/hande_driver.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
-EOF

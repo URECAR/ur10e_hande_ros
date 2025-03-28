@@ -26,7 +26,20 @@ manipulator_controller:
   state_publish_rate: 25
   action_monitor_rate: 10
 
-# Hand-E 그리퍼 컨트롤러
+# 가상 그리퍼 컨트롤러 (데모 모드에서 사용)
+fake_gripper_controller:
+  type: position_controllers/JointTrajectoryController
+  joints:
+    - gripper_robotiq_hande_left_finger_joint
+  constraints:
+    goal_time: 0.6
+    stopped_velocity_tolerance: 0.05
+    gripper_robotiq_hande_left_finger_joint: {trajectory: 0.1, goal: 0.1}
+  stop_trajectory_duration: 0.5
+  state_publish_rate: 25
+  action_monitor_rate: 10
+
+# 실제 그리퍼 컨트롤러
 gripper_controller:
   type: position_controllers/JointTrajectoryController
   joints:

@@ -105,7 +105,7 @@ catkin_python_setup()
 ## CATKIN_DEPENDS: catkin_packages dependent projects also need
 ## DEPENDS: system dependencies of this project that dependent projects also need
 catkin_package(
-  CATKIN DEPENDS rospy std_msgs
+  CATKIN_DEPENDS rospy std_msgs
 #  INCLUDE_DIRS include
 #  LIBRARIES ur10e_2f_140_control
 #  CATKIN_DEPENDS geometry_msgs moveit_commander rospy tf

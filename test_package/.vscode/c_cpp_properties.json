@@ -1,0 +1,28 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "${default}",
+        "limitSymbolsToIncludedHeaders": false
+      },
+      "includePath": [
+        "/opt/ros/humble/include/**",
+        "/home/mecharv/Noetic_ws/catkin_ws/src/Universal_Robots_ROS_Driver/ur_calibration/include/**",
+        "/home/mecharv/Noetic_ws/catkin_ws/src/Universal_Robots_ROS_Driver/ur_robot_driver/include/**",
+        "/home/mecharv/Noetic_ws/catkin_ws/src/robotiq-kinetic-devel/robotiq_2f_gripper_action_server/include/**",
+        "/home/mecharv/Noetic_ws/catkin_ws/src/robotiq-kinetic-devel/robotiq_2f_gripper_control/include/**",
+        "/home/mecharv/Noetic_ws/catkin_ws/src/robotiq-kinetic-devel/robotiq_ethercat/include/**",
+        "/home/mecharv/Noetic_ws/catkin_ws/src/robotiq-kinetic-devel/robotiq_ft_sensor/include/**",
+        "/home/mecharv/Noetic_ws/catkin_ws/src/universal_robot/ur_kinematics/include/**",
+        "/home/mecharv/Noetic_ws/catkin_ws/src/ur10e_hande/hande_bringup/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS",
+      "intelliSenseMode": "gcc-x64",
+      "compilerPath": "/usr/bin/gcc",
+      "cStandard": "gnu11",
+      "cppStandard": "c++14"
+    }
+  ],
+  "version": 4
+}

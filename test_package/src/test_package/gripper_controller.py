@@ -2,13 +2,20 @@
 # -*- coding: utf-8 -*-
 
 import rospy
-from std_msgs.msg import Float64
+from std_msgs.msg import Float64, Bool, UInt8
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 from hande_bringup.srv import GripperControl, GripperControlRequest
 
 class GripperController(QObject):
     """그리퍼 제어 및 상태 모니터링 클래스"""
     status_updated = pyqtSignal(dict)  # 그리퍼 상태 업데이트
+    
+    # 명령 타입 상수 정의 (하드 코딩)
+    CMD_POSITION = 0  # 위치 설정 (0-255)
+    CMD_SPEED = 1     # 속도 설정 (0-255)
+    CMD_FORCE = 2     # 힘 설정 (0-255)
+    CMD_OPEN = 3      # 그리퍼 열기
+    CMD_CLOSE = 4     # 그리퍼 닫기
     
     def __init__(self, ip_address="192.168.56.101"):
         super().__init__()
@@ -24,10 +31,13 @@ class GripperController(QObject):
         self.speed = 255       # 속도 (0-255)
         self.moving = False    # 이동 중 여부
         self.activated = True  # 활성화 여부
-        self.object_detected = False  # 물체 감지 여부 (사용하지 않음)
+        self.object_detected = False  # 물체 감지 여부
         
-        # 그리퍼 너비 구독
+        # 그리퍼 상태 구독
         self.width_sub = rospy.Subscriber('hande_gripper/width', Float64, self.width_callback)
+        self.object_sub = rospy.Subscriber('hande_gripper/object_detected', Bool, self.object_callback)
+        self.moving_sub = rospy.Subscriber('hande_gripper/moving', Bool, self.moving_callback)
+        self.position_sub = rospy.Subscriber('hande_gripper/position', UInt8, self.position_callback)
         
         # 서비스 연결
         self.control_service = None
@@ -51,16 +61,31 @@ class GripperController(QObject):
     def width_callback(self, msg):
         """그리퍼 너비 콜백"""
         self.width = msg.data
-        self.position = self.width / 0.025  # 0.025m = 25mm (최대 열림 폭)
+        max_width = 0.050  # 최대 열림 폭 50mm = 0.050m
+        self.position = self.width / max_width  # 0.0-1.0 범위로 정규화
         
         # 너비가 변경되면 이동 중 상태를 업데이트
-        # (실제로는 이동 중 상태는 서비스에서 받아와야 하지만, 간소화를 위해 여기서는 생략)
-        if abs(self.width - self.old_width) > 0.001 if hasattr(self, 'old_width') else True:
-            self.moving = True
-        else:
-            self.moving = False
-        
+        if hasattr(self, 'old_width'):
+            if abs(self.width - self.old_width) > 0.001:
+                self.moving = True
+            else:
+                self.moving = False
+                
         self.old_width = self.width
+    
+    def object_callback(self, msg):
+        """물체 감지 콜백"""
+        self.object_detected = msg.data
+        rospy.loginfo(f"물체 감지 상태 업데이트: {self.object_detected}")
+    
+    def moving_callback(self, msg):
+        """이동 중 상태 콜백"""
+        self.moving = msg.data
+    
+    def position_callback(self, msg):
+        """위치 값 콜백"""
+        # 0-255 범위의 값을 0.0-1.0 범위로 변환
+        self.position = msg.data / 255.0
     
     def emit_status(self):
         """현재 상태를 Qt 시그널로 발생"""
@@ -71,7 +96,7 @@ class GripperController(QObject):
             'width': self.width,
             'activated': self.activated,
             'moving': self.moving,
-            'object_detected': self.object_detected,  # 항상 False
+            'object_detected': self.object_detected,
             'virtual_mode': self.virtual_mode
         }
         self.status_updated.emit(status_dict)
@@ -80,6 +105,7 @@ class GripperController(QObject):
         """그리퍼 서비스 호출 공통 함수"""
         if self.control_service is None:
             rospy.logwarn("그리퍼 서비스에 연결되어 있지 않습니다")
+            self.try_reconnect_service()
             return False
         
         try:
@@ -90,21 +116,40 @@ class GripperController(QObject):
             resp = self.control_service(req)
             if not resp.success:
                 rospy.logwarn(f"그리퍼 서비스 호출 실패: {resp.message}")
+            else:
+                rospy.loginfo(f"그리퍼 서비스 호출 성공: {resp.message}")
             
             return resp.success
-        except Exception as e:
+        except rospy.ServiceException as e:
             rospy.logerr(f"그리퍼 서비스 호출 오류: {e}")
+            self.try_reconnect_service()
+            return False
+        except Exception as e:
+            rospy.logerr(f"그리퍼 서비스 호출 중 예외 발생: {e}")
+            return False
+    
+    def try_reconnect_service(self):
+        """서비스 재연결 시도"""
+        try:
+            rospy.loginfo("그리퍼 서비스 재연결 시도...")
+            self.control_service = rospy.ServiceProxy('hande_gripper/control', GripperControl)
+            # 서비스 가용성 테스트
+            self.control_service.wait_for_service(timeout=1.0)
+            rospy.loginfo("그리퍼 서비스 재연결 성공")
+            return True
+        except (rospy.ROSException, rospy.ServiceException):
+            rospy.logwarn("그리퍼 서비스 재연결 실패")
             return False
     
     def set_force(self, force):
         """그리퍼 힘 설정 (0-255)"""
         self.force = force
-        return self.call_gripper_service(GripperControlRequest.FORCE, force)
+        return self.call_gripper_service(self.CMD_FORCE, force)
     
     def set_speed(self, speed):
         """그리퍼 속도 설정 (0-255)"""
         self.speed = speed
-        return self.call_gripper_service(GripperControlRequest.SPEED, speed)
+        return self.call_gripper_service(self.CMD_SPEED, speed)
     
     def set_position(self, position):
         """그리퍼 위치 설정 (0.0-1.0)"""
@@ -115,10 +160,10 @@ class GripperController(QObject):
         position_value = int(position * 255)
         
         # 서비스 호출
-        success = self.call_gripper_service(GripperControlRequest.POSITION, position_value)
+        success = self.call_gripper_service(self.CMD_POSITION, position_value)
         
         if success:
-            # 이미 moving 상태로 설정, 실제 상태는 width_callback에서 업데이트됨
+            # 이미 moving 상태로 설정, 실제 상태는 콜백에서 업데이트됨
             self.moving = True
         
         return success
@@ -126,20 +171,19 @@ class GripperController(QObject):
     def open_gripper(self):
         """그리퍼 완전히 열기"""
         rospy.loginfo("그리퍼 열기 명령 발행")
-        # GripperControlRequest.OPEN 대신 숫자 값 3 사용
-        success = self.call_gripper_service(3)  # OPEN=3으로 정의됨
+        success = self.call_gripper_service(self.CMD_OPEN)
         if success:
             self.moving = True
         return success
-
+    
     def close_gripper(self):
         """그리퍼 완전히 닫기"""
         rospy.loginfo("그리퍼 닫기 명령 발행")
-        # GripperControlRequest.CLOSE 대신 숫자 값 4 사용
-        success = self.call_gripper_service(4)  # CLOSE=4로 정의됨
+        success = self.call_gripper_service(self.CMD_CLOSE)
         if success:
             self.moving = True
         return success
+    
     def close(self):
         """컨트롤러 종료"""
         # 타이머 정지
@@ -149,3 +193,9 @@ class GripperController(QObject):
         # 구독 해제
         if self.width_sub:
             self.width_sub.unregister()
+        if self.object_sub:
+            self.object_sub.unregister()
+        if self.moving_sub:
+            self.moving_sub.unregister()
+        if self.position_sub:
+            self.position_sub.unregister()

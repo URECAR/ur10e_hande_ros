@@ -313,18 +313,59 @@ class URControlGUI(QMainWindow):
         gripper_tab = QWidget()
         gripper_layout = QVBoxLayout(gripper_tab)
         
-        # 그리퍼 상태 그룹 - 간소화
+        # 그리퍼 상태 그룹
         gripper_status_group = QGroupBox("그리퍼 상태")
         gripper_status_layout = QGridLayout()
         
-        # 그리퍼 너비 표시
+        # 너비 표시
         gripper_status_layout.addWidget(QLabel("너비:"), 0, 0)
         self.gripper_width_label = QLabel("0.00 mm")
         self.gripper_width_label.setStyleSheet("font-size: 14px; font-weight: bold;")
         gripper_status_layout.addWidget(self.gripper_width_label, 0, 1)
         
+        # 물체 감지 상태
+        gripper_status_layout.addWidget(QLabel("물체 감지:"), 1, 0)
+        self.gripper_object_label = QLabel("감지 없음")
+        gripper_status_layout.addWidget(self.gripper_object_label, 1, 1)
+        
+        # 이동 상태
+        gripper_status_layout.addWidget(QLabel("상태:"), 2, 0)
+        self.gripper_moving_label = QLabel("정지")
+        gripper_status_layout.addWidget(self.gripper_moving_label, 2, 1)
+        
         gripper_status_group.setLayout(gripper_status_layout)
         gripper_layout.addWidget(gripper_status_group)
+        
+        # 그리퍼 파라미터 그룹
+        gripper_param_group = QGroupBox("그리퍼 파라미터")
+        gripper_param_layout = QGridLayout()
+        
+        # 속도 슬라이더
+        gripper_param_layout.addWidget(QLabel("속도:"), 0, 0)
+        self.gripper_speed_slider = QSlider(Qt.Horizontal)
+        self.gripper_speed_slider.setRange(0, 255)
+        self.gripper_speed_slider.setValue(255)
+        self.gripper_speed_slider.setTickPosition(QSlider.TicksBelow)
+        self.gripper_speed_slider.setTickInterval(25)
+        self.gripper_speed_value = QLabel("255")
+        self.gripper_speed_slider.valueChanged.connect(self.set_gripper_speed)
+        gripper_param_layout.addWidget(self.gripper_speed_slider, 0, 1)
+        gripper_param_layout.addWidget(self.gripper_speed_value, 0, 2)
+        
+        # 힘 슬라이더
+        gripper_param_layout.addWidget(QLabel("힘:"), 1, 0)
+        self.gripper_force_slider = QSlider(Qt.Horizontal)
+        self.gripper_force_slider.setRange(0, 255)
+        self.gripper_force_slider.setValue(255)
+        self.gripper_force_slider.setTickPosition(QSlider.TicksBelow)
+        self.gripper_force_slider.setTickInterval(25)
+        self.gripper_force_value = QLabel("255")
+        self.gripper_force_slider.valueChanged.connect(self.set_gripper_force)
+        gripper_param_layout.addWidget(self.gripper_force_slider, 1, 1)
+        gripper_param_layout.addWidget(self.gripper_force_value, 1, 2)
+        
+        gripper_param_group.setLayout(gripper_param_layout)
+        gripper_layout.addWidget(gripper_param_group)
         
         # 그리퍼 위치 제어 그룹
         gripper_control_group = QGroupBox("위치 제어")
@@ -448,11 +489,28 @@ class URControlGUI(QMainWindow):
             self.plan_joint_button.setEnabled(True)
             self.plan_tcp_button.setEnabled(True)
     
+
     def update_gripper_display(self, status):
-        """그리퍼 상태 업데이트 - 간소화"""
+        """그리퍼 상태 업데이트 (물체 감지 포함)"""
         # 그리퍼 너비 표시 업데이트 (미터 -> 밀리미터)
         width_mm = status['width'] * 1000  # 미터 -> 밀리미터
         self.gripper_width_label.setText(f"{width_mm:.2f} mm")
+        
+        # 물체 감지 상태 표시
+        if status['object_detected']:
+            self.gripper_object_label.setText("물체 감지됨")
+            self.gripper_object_label.setStyleSheet("color: green; font-weight: bold;")
+        else:
+            self.gripper_object_label.setText("감지 없음")
+            self.gripper_object_label.setStyleSheet("color: gray;")
+        
+        # 이동 상태 표시
+        if status['moving']:
+            self.gripper_moving_label.setText("이동 중")
+            self.gripper_moving_label.setStyleSheet("color: blue; font-weight: bold;")
+        else:
+            self.gripper_moving_label.setText("정지")
+            self.gripper_moving_label.setStyleSheet("color: black;")
         
         # 슬라이더 업데이트 (순환 업데이트 방지)
         position_value = int(status['position'] * 255)
@@ -460,6 +518,16 @@ class URControlGUI(QMainWindow):
             self.gripper_position_slider.blockSignals(True)
             self.gripper_position_slider.setValue(position_value)
             self.gripper_position_slider.blockSignals(False)
+    
+    def set_gripper_speed(self, value):
+        """그리퍼 속도 설정"""
+        self.gripper_speed_value.setText(str(value))
+        self.gripper_controller.set_speed(value)
+    
+    def set_gripper_force(self, value):
+        """그리퍼 힘 설정"""
+        self.gripper_force_value.setText(str(value))
+        self.gripper_controller.set_force(value)
     
     def set_gripper_position(self, value):
         """슬라이더를 통한 그리퍼 위치 설정"""

@@ -593,6 +593,13 @@ class URControlGUI(QMainWindow):
     
     def closeEvent(self, event):
         """창이 닫힐 때 호출되는 이벤트 핸들러"""
+        # 로봇 컨트롤러 정리
+        if hasattr(self, 'robot_controller'):
+            try:
+                self.robot_controller.cleanup()
+            except Exception as e:
+                rospy.logerr(f"로봇 컨트롤러 정리 오류: {e}")
+        
         # 그리퍼 컨트롤러 종료
         if hasattr(self, 'gripper_controller'):
             self.gripper_controller.close()

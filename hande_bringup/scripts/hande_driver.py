@@ -613,12 +613,12 @@ class HandEGripperDriver:
         # Joint State 발행
         self.joint_state_pub.publish(joint_state)
         
-        # 로깅 (5초에 한 번 정도)
-        if int(rospy.Time.now().to_sec() * 10) % 50 == 0:
-            status_str = f"위치={self.position:.2f}, 너비={width*1000:.1f}mm"
-            status_str += f", 물체감지={'O' if self.object_detected else 'X'}"
-            status_str += f", 이동중={'O' if self.moving else 'X'}"
-            rospy.loginfo(f"그리퍼 상태: {status_str}")
+        # # 로깅 (5초에 한 번 정도)
+        # if int(rospy.Time.now().to_sec() * 10) % 50 == 0:
+        #     status_str = f"위치={self.position:.2f}, 너비={width*1000:.1f}mm"
+        #     status_str += f", 물체감지={'O' if self.object_detected else 'X'}"
+        #     status_str += f", 이동중={'O' if self.moving else 'X'}"
+        #     rospy.loginfo(f"그리퍼 상태: {status_str}")
     
     def run(self):
         """그리퍼 드라이버 실행"""

@@ -6,7 +6,7 @@ import time
 from math import degrees, radians
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal, QThread
 from sensor_msgs.msg import JointState
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Pose, PoseStamped
 from std_msgs.msg import Bool
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 import moveit_commander
@@ -149,6 +149,13 @@ class URRobotController(QObject):
             # 기준 프레임과 엔드 이펙터 프레임
             self.base_frame = self.move_group.get_planning_frame()
             self.ee_frame = self.move_group.get_end_effector_link()
+            
+            # 추가된 상자 목록 초기화
+            self.added_boxes = []
+            
+            # 로봇 작업 영역에 기본 상자 추가
+            self.add_box('workspace_box', [0, 0, 0], [0.795, 0.6, 1.0], center=True)
+            self.add_box('workspace_box2', [0.66, 0.055, 0.151], [0.50, 0.50, 1.151], center=True)
         except Exception as e:
             rospy.logerr(f"MoveIt 초기화 오류: {e}")
             raise
@@ -267,3 +274,62 @@ class URRobotController(QObject):
         """실행 스레드 완료 콜백"""
         # 결과 전달
         self.planning_result.emit(success, message)
+
+    def add_box(self, name, position, size, center=True):
+        """
+        작업 영역에 상자 추가
+        
+        Args:
+            name (str): 상자 이름
+            position (list): 상자 위치 [x, y, z]
+            size (list): 상자 크기 [x, y, z]
+            center (bool): 위치가 상자의 중심인지 여부 (기본값: True)
+        
+        Returns:
+            bool: 상자 추가 성공 여부
+        """
+        try:
+            # 상자 포즈 설정
+            box_pose = PoseStamped()
+            box_pose.header.frame_id = self.base_frame
+            box_pose.header.stamp = rospy.Time.now()
+            
+            # 위치 설정 (center 옵션에 따라 계산)
+            if center:
+                # 위치를 중심점으로 설정
+                box_pose.pose.position.x = position[0]
+                box_pose.pose.position.y = position[1]
+                box_pose.pose.position.z = position[2] - size[2]/2
+            else:
+                # 위치를 좌하단 모서리로 설정 (중심점 계산)
+                box_pose.pose.position.x = position[0] + size[0]/2
+                box_pose.pose.position.y = position[1] + size[1]/2
+                box_pose.pose.position.z = position[2] + size[2]/2
+            
+            # 방향은 기본값 (회전 없음)
+            box_pose.pose.orientation.w = 1.0
+            
+            # 상자 추가
+            self.scene.add_box(name, box_pose, size=size)
+            self.added_boxes.append(name)  # 추가된 상자 이름 저장
+            
+            rospy.loginfo(f"상자 추가: 이름={name}, 크기={size[0]*1000:.0f}x{size[1]*1000:.0f}x{size[2]*1000:.0f}mm")
+            return True
+            
+        except Exception as e:
+            rospy.logerr(f"상자 추가 오류: {e}")
+            return False
+    def cleanup(self):
+        """종료 시 리소스 정리"""
+        rospy.loginfo("추가된 상자 제거 중...")
+        
+        # 추가했던 모든 상자 제거
+        for box_name in self.added_boxes:
+            try:
+                self.scene.remove_world_object(box_name)
+                rospy.loginfo(f"상자 제거: {box_name}")
+            except Exception as e:
+                rospy.logerr(f"상자 제거 오류 ({box_name}): {e}")
+        
+        # 추가된 상자 목록 초기화
+        self.added_boxes = []

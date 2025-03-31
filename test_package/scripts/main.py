@@ -40,6 +40,30 @@ def check_gripper_service():
     except rospy.ROSException:
         return False
 
+def cleanup_resources(robot_controller=None, gripper_controller=None):
+    """프로그램 종료 시 리소스 정리"""
+    if robot_controller:
+        try:
+            robot_controller.cleanup()  # 작업 상자 제거
+        except Exception as e:
+            rospy.logerr(f"로봇 컨트롤러 정리 중 오류: {e}")
+    
+    if gripper_controller:
+        try:
+            gripper_controller.close()
+        except Exception as e:
+            rospy.logerr(f"그리퍼 컨트롤러 정리 중 오류: {e}")
+    
+    # ROS 종료
+    if not rospy.is_shutdown():
+        rospy.signal_shutdown("Application closed")
+    
+    # MoveIt 종료
+    try:
+        moveit_commander.roscpp_shutdown()
+    except:
+        pass
+
 
 def main():
     # QApplication 생성
@@ -85,12 +109,16 @@ def main():
         # GUI 생성 및 표시
         gui = URControlGUI(robot_controller, gripper_controller)
         gui.show()
-        
+
+        # 종료 시 정리 함수 등록
+        app.aboutToQuit.connect(lambda: cleanup_resources(robot_controller, gripper_controller))
+
         # QApplication 이벤트 루프 실행
         sys.exit(app.exec_())
     
     except Exception as e:
         rospy.logerr(f"초기화 오류: {e}")
+        cleanup_resources(robot_controller, gripper_controller)
         sys.exit(1)
     
     finally:

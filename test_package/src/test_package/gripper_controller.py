@@ -76,7 +76,7 @@ class GripperController(QObject):
     def object_callback(self, msg):
         """물체 감지 콜백"""
         self.object_detected = msg.data
-        rospy.loginfo(f"물체 감지 상태 업데이트: {self.object_detected}")
+        # rospy.loginfo(f"물체 감지 상태 업데이트: {self.object_detected}")
     
     def moving_callback(self, msg):
         """이동 중 상태 콜백"""

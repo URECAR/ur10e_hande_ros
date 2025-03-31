@@ -367,13 +367,20 @@ class URControlGUI(QMainWindow):
         gripper_param_group.setLayout(gripper_param_layout)
         gripper_layout.addWidget(gripper_param_group)
         
-        # 그리퍼 위치 제어 그룹
+    # 그리퍼 위치 제어 그룹 (버튼 대신 텍스트 상자 사용)
         gripper_control_group = QGroupBox("위치 제어")
         gripper_control_layout = QVBoxLayout()
-        
+
         # 위치 슬라이더
         slider_layout = QHBoxLayout()
-        slider_layout.addWidget(QLabel("닫힘"))
+
+        # 닫힘 텍스트 상자 (버튼 대체)
+        self.gripper_close_box = QPushButton("닫힘")
+        self.gripper_close_box.setStyleSheet("background-color: #f0f0f0; border: 1px solid #cccccc; padding: 5px;")
+        self.gripper_close_box.clicked.connect(self.close_gripper)
+        slider_layout.addWidget(self.gripper_close_box)
+
+        # 슬라이더
         self.gripper_position_slider = QSlider(Qt.Horizontal)
         self.gripper_position_slider.setRange(0, 255)
         self.gripper_position_slider.setValue(0)
@@ -381,26 +388,16 @@ class URControlGUI(QMainWindow):
         self.gripper_position_slider.setTickInterval(25)
         self.gripper_position_slider.valueChanged.connect(self.set_gripper_position)
         slider_layout.addWidget(self.gripper_position_slider)
-        slider_layout.addWidget(QLabel("열림"))
+
+        # 열림 텍스트 상자 (버튼 대체)
+        self.gripper_open_box = QPushButton("열림")
+        self.gripper_open_box.setStyleSheet("background-color: #f0f0f0; border: 1px solid #cccccc; padding: 5px;")
+        self.gripper_open_box.clicked.connect(self.open_gripper)
+        slider_layout.addWidget(self.gripper_open_box)
+
         gripper_control_layout.addLayout(slider_layout)
-        
-        # 버튼 레이아웃
-        button_layout = QHBoxLayout()
-        
-        # 열기 버튼
-        self.gripper_open_button = QPushButton("그리퍼 열기")
-        self.gripper_open_button.clicked.connect(self.open_gripper)
-        button_layout.addWidget(self.gripper_open_button)
-        
-        # 닫기 버튼
-        self.gripper_close_button = QPushButton("그리퍼 닫기")
-        self.gripper_close_button.clicked.connect(self.close_gripper)
-        button_layout.addWidget(self.gripper_close_button)
-        
-        gripper_control_layout.addLayout(button_layout)
         gripper_control_group.setLayout(gripper_control_layout)
-        gripper_layout.addWidget(gripper_control_group)
-        
+        gripper_layout.addWidget(gripper_control_group)    
         # 그리퍼 탭에 레이아웃 설정 및 탭에 추가
         gripper_tab.setLayout(gripper_layout)
         self.tabs.addTab(gripper_tab, "그리퍼 제어")

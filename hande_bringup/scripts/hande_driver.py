@@ -2,17 +2,13 @@
 # -*- coding: utf-8 -*-
 
 import sys
-import signal
 import rospy
-import threading
 import time
 import serial
 import binascii
-from std_msgs.msg import Float64, Bool, UInt8
+from std_msgs.msg import Float64
 from sensor_msgs.msg import JointState
-from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
-                            QSlider, QPushButton, QLabel, QCheckBox, QGroupBox)
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject
+from hande_bringup.srv import GripperControl, GripperControlResponse
 
 class SimpleGripperController:
     """직접 serial 통신을 사용한 간단한 그리퍼 제어 클래스"""
@@ -39,7 +35,7 @@ class SimpleGripperController:
                 rospy.loginfo(f"그리퍼와 연결 성공: {self.port}")
                 self.connected = True
                 
-                # 그리퍼 초기화 명령 전송 (공유해주신 코드와 동일)
+                # 그리퍼 초기화 명령 전송
                 rospy.loginfo("그리퍼 초기화 시작...")
                 self.serial.write(b"\x09\x10\x03\xE8\x00\x03\x06\x00\x00\x00\x00\x00\x00\x73\x30")
                 data_raw = self.serial.readline()
@@ -67,7 +63,7 @@ class SimpleGripperController:
             return False
             
         try:
-            # 열기 명령 (공유해주신 코드 참조)
+            # 열기 명령
             self.serial.write(b"\x09\x10\x03\xE8\x00\x03\x06\x09\x00\x00\x00\xFF\xFF\x72\x19")
             response = self.serial.readline()
             rospy.loginfo(f"열기 응답: {binascii.hexlify(response)}")
@@ -83,7 +79,7 @@ class SimpleGripperController:
             return False
             
         try:
-            # 닫기 명령 (공유해주신 코드 참조)
+            # 닫기 명령
             self.serial.write(b"\x09\x10\x03\xE8\x00\x03\x06\x09\x00\x00\xFF\xFF\xFF\x42\x29")
             response = self.serial.readline()
             rospy.loginfo(f"닫기 응답: {binascii.hexlify(response)}")
@@ -93,6 +89,48 @@ class SimpleGripperController:
             rospy.logerr(f"그리퍼 닫기 오류: {e}")
             return False
     
+    def set_position(self, position_value, force=255, speed=255):
+        """그리퍼 위치 설정 (0-255)"""
+        if not self.connected:
+            return False
+            
+        try:
+            # 위치 명령 생성
+            cmd = bytearray([0x09, 0x10, 0x03, 0xE8, 0x00, 0x03, 0x06, 0x09, 0x00, 0x00])
+            cmd.append(position_value)  # 위치 (0-255)
+            cmd.append(speed)           # 속도
+            cmd.append(force)           # 힘
+            
+            # CRC 계산 (간략화된 방식)
+            cmd.extend([0x42, 0x29])  # 실제로는 정확한 CRC 계산 필요
+            
+            self.serial.write(cmd)
+            response = self.serial.readline()
+            rospy.loginfo(f"위치 설정 응답: {binascii.hexlify(response)}")
+            return True
+        except Exception as e:
+            rospy.logerr(f"그리퍼 위치 설정 오류: {e}")
+            return False
+    
+    def get_position(self):
+        """그리퍼 현재 위치 읽기 (0-255)"""
+        if not self.connected:
+            return 0
+            
+        try:
+            # 상태 요청 명령
+            self.serial.write(b"\x09\x03\x07\xD0\x00\x03\x04\x0E")
+            data_raw = self.serial.readline()
+            
+            # 응답 파싱 (간략화)
+            if len(data_raw) >= 6:
+                position = data_raw[5] if len(data_raw) > 5 else 0
+                return position
+            return 0
+        except Exception as e:
+            rospy.logerr(f"그리퍼 위치 읽기 오류: {e}")
+            return 0
+    
     def close(self):
         """연결 종료"""
         if self.serial and self.connected:
@@ -100,12 +138,13 @@ class SimpleGripperController:
             self.connected = False
 
 
-class GripperControlGUI(QWidget):
+class HandEGripperDriver:
+    """간소화된 Hand-E 그리퍼 드라이버"""
+    
     def __init__(self):
-        super().__init__()
         # ROS 노드 초기화 (이미 초기화되었는지 확인)
         if not rospy.core.is_initialized():
-            rospy.init_node('hande_gripper_gui_driver', anonymous=True)
+            rospy.init_node('hande_gripper_driver', anonymous=True)
         
         # 모드 확인 (real or virtual)
         self.mode = rospy.get_param('~mode', 'virtual')
@@ -128,283 +167,193 @@ class GripperControlGUI(QWidget):
                 rospy.logwarn(f"가상 모드로 전환: {e}")
         
         # 상태 변수
-        self.position = 0.0  # 그리퍼 위치 (0.0 = 닫힘, 1.0 = 열림) - 논리적 표현
-        self.activated = False  # 활성화 상태
-        self.moving = False     # 이동 중 상태
-        self.object_detected = False  # 물체 감지 상태
-        self.slider_updating = False  # 슬라이더 업데이트 중 플래그
+        self.position = 0.0  # 그리퍼 위치 (0.0 = 닫힘, 1.0 = 열림)
+        self.target_position = 0.0  # 목표 위치
+        self.force = 255  # 힘 (0-255)
+        self.speed = 255  # 속도 (0-255)
+        self.moving = False  # 이동 중 상태
         
-        # 마지막 상태 업데이트 시간
-        self.last_update_time = rospy.Time.now()
+        # 초기 활성화
+        self.activated = True
         
-        # 퍼블리셔 설정
-        self.activated_pub = rospy.Publisher('hande_gripper/status/activated', Bool, queue_size=10)
-        self.moving_pub = rospy.Publisher('hande_gripper/status/moving', Bool, queue_size=10)
-        self.position_pub = rospy.Publisher('hande_gripper/status/position', UInt8, queue_size=10)
-        self.object_pub = rospy.Publisher('hande_gripper/status/object', UInt8, queue_size=10)
+        # 그리퍼 너비 발행자 (미터 단위)
+        self.width_pub = rospy.Publisher('hande_gripper/width', Float64, queue_size=10)
         
-        # 조인트 상태 발행자
-        self.joint_state_pub = rospy.Publisher('hande_gripper/joint_state', Float64, queue_size=10)
+        # Joint State 발행자 - RViz 시각화를 위해 추가
+        self.joint_state_pub = rospy.Publisher('/joint_states', JointState, queue_size=10)
         
-        # 전체 로봇 조인트 상태에 그리퍼 조인트 추가
-        self.joint_states_pub = rospy.Publisher('/joint_states', JointState, queue_size=10)
+        # 서비스 서버 설정
+        self.control_service = rospy.Service('hande_gripper/control', GripperControl, self.handle_control_service)
         
-        # UI 초기화
-        self.initUI()
+        # 타이머 설정
+        self.update_timer = None  # 초기화: 아래에서 실제 타이머 시작
         
-        # ROS 타이머 - 상태 발행 및 가상 모드일 때 시뮬레이션
-        self.update_timer = QTimer(self)
-        self.update_timer.timeout.connect(self.update_gripper_state)
-        self.update_timer.start(100)  # 10Hz
+        # 타이머 시작
+        self.start_update_timer()
         
-        rospy.loginfo("Robotiq Hand-E 그리퍼 GUI 드라이버 초기화 완료")
+        # 시뮬레이션용 변수
+        self.movement_active = False
+        self.movement_start_time = None
+        
+        rospy.loginfo("Hand-E 그리퍼 드라이버 초기화 완료")
     
-    def initUI(self):
-        # 레이아웃 설정
-        main_layout = QVBoxLayout()
-        from PyQt5.QtGui import QFont
-        default_font = QFont("Sans", 9)  # Sans 폰트, 크기 9
-        self.setFont(default_font)       
-        
-        # 상태 표시 영역
-        status_box = QGroupBox("그리퍼 상태")
-        status_layout = QVBoxLayout()
-        
-        # 동작 모드 표시
-        self.mode_label = QLabel(f"모드: {'실제 그리퍼' if self.mode == 'real' else '가상 그리퍼'}")
-        status_layout.addWidget(self.mode_label)
-        
-        # 위치 슬라이더 및 표시
-        slider_layout = QHBoxLayout()
-        self.position_slider = QSlider(Qt.Horizontal)
-        self.position_slider.setMinimum(0)
-        self.position_slider.setMaximum(255)
-        self.position_slider.setValue(0)  # 초기값: 닫힘
-        self.position_slider.setTickPosition(QSlider.TicksBelow)
-        self.position_slider.setTickInterval(25)
-        self.position_slider.valueChanged.connect(self.slider_value_changed)
-        slider_layout.addWidget(self.position_slider)
-        
-        self.position_label = QLabel("위치: 닫힘 (0)")
-        slider_layout.addWidget(self.position_label)
-        status_layout.addLayout(slider_layout)
-        
-        # 물체 감지 상태
-        self.object_label = QLabel("물체 감지: 없음")
-        status_layout.addWidget(self.object_label)
-        
-        status_box.setLayout(status_layout)
-        main_layout.addWidget(status_box)
-        
-        # 제어 버튼
-        control_box = QGroupBox("그리퍼 제어")
-        control_layout = QHBoxLayout()
-        
-        # 열기 버튼
-        self.open_button = QPushButton("그리퍼 열기")
-        self.open_button.clicked.connect(self.open_gripper)
-        control_layout.addWidget(self.open_button)
-        
-        # 닫기 버튼
-        self.close_button = QPushButton("그리퍼 닫기")
-        self.close_button.clicked.connect(self.close_gripper)
-        control_layout.addWidget(self.close_button)
-        
-        control_box.setLayout(control_layout)
-        main_layout.addWidget(control_box)
-        
-        self.setLayout(main_layout)
-        
-        # 창 설정
-        self.setWindowTitle(f'Robotiq Hand-E 그리퍼 컨트롤 ({self.mode} 모드)')
-        self.setGeometry(300, 300, 400, 200)
+    def start_update_timer(self):
+        """상태 업데이트 타이머 시작"""
+        self.update_timer = rospy.Timer(rospy.Duration(0.1), self.update_state)  # 10Hz
     
-    def slider_value_changed(self):
-        """슬라이더 값 변경 시 호출되는 함수"""
-        # 다른 곳에서 슬라이더를 업데이트하는 중이면 무시
-        if self.slider_updating:
-            return
+    def handle_control_service(self, req):
+        """그리퍼 제어 서비스 핸들러"""
+        response = GripperControlResponse()
+        
+        try:
+            if req.command_type == 0:  # POSITION
+                position_value = req.value  # 0-255 범위
+                self.target_position = float(position_value) / 255.0
+                
+                if self.mode == 'real' and self.gripper:
+                    success = self.gripper.set_position(position_value, self.force, self.speed)
+                else:
+                    success = True
+                    # 가상 모드에서 이동 시뮬레이션
+                    self.start_movement_simulation()
+                
+                response.success = success
+                response.message = f"위치 이동 명령 {'성공' if success else '실패'}"
             
-        # 슬라이더 값을 그리퍼 위치로 변환 (0-255 -> 0.0-1.0)
-        position_value = self.position_slider.value()
-        self.position = position_value / 255.0
-        
-        # 위치 레이블 업데이트
-        self.update_position_label()
-        
-        # 실제 모드에서는 위치에 따라 열기/닫기 명령 선택
-        if self.mode == 'real' and self.gripper:
-            if position_value > 127:  # 중간값 이상이면 열기
-                self.open_gripper()
-            else:  # 중간값 미만이면 닫기
-                self.close_gripper()
-            self.activated = True
-            self.moving = True
-        else:
-            # 가상 모드에서는 즉시 위치 변경
-            self.activated = True
-            self.moving = True
+            elif req.command_type == 1:  # SPEED
+                self.speed = req.value
+                response.success = True
+                response.message = f"속도 설정: {self.speed}"
             
-            # 0.5초 후 이동 완료로 표시
-            QTimer.singleShot(500, self.complete_movement)
-    
-    def complete_movement(self):
-        """이동 완료 처리"""
-        self.moving = False
-        # 물체 감지 시뮬레이션 (닫혔을 때만)
-        if self.position < 0.2 and self.mode == 'virtual':
-            # 20% 확률로 물체 감지
-            if rospy.Time.now().to_sec() % 10 < 2:
-                self.object_detected = True
+            elif req.command_type == 2:  # FORCE
+                self.force = req.value
+                response.success = True
+                response.message = f"힘 설정: {self.force}"
+            
+            elif req.command_type == 3:  # OPEN
+                if self.mode == 'real' and self.gripper:
+                    success = self.gripper.open_gripper()
+                else:
+                    success = True
+                    self.target_position = 1.0
+                    self.start_movement_simulation()
+                
+                response.success = success
+                response.message = f"그리퍼 열기 {'성공' if success else '실패'}"
+            
+            elif req.command_type == 4:  # CLOSE
+                if self.mode == 'real' and self.gripper:
+                    success = self.gripper.close_gripper()
+                else:
+                    success = True
+                    self.target_position = 0.0
+                    self.start_movement_simulation()
+                
+                response.success = success
+                response.message = f"그리퍼 닫기 {'성공' if success else '실패'}"
+            
             else:
-                self.object_detected = False
+                response.success = False
+                response.message = "알 수 없는 명령 유형"
+        
+        except Exception as e:
+            response.success = False
+            response.message = f"명령 처리 오류: {str(e)}"
+            rospy.logerr(f"서비스 처리 오류: {e}")
+        
+        return response
     
-    def update_position_label(self):
-        """위치 레이블 업데이트"""
-        value = self.position_slider.value()
-        if value < 10:
-            text = f"위치: 닫힘 ({value})"
-        elif value > 245:
-            text = f"위치: 완전 열림 ({value})"
-        else:
-            text = f"위치: {value} (0:닫힘, 255:열림)"
-        self.position_label.setText(text)
+    def start_movement_simulation(self):
+        """가상 모드에서 그리퍼 이동 시뮬레이션 시작"""
+        self.moving = True
+        self.movement_active = True
+        self.movement_start_time = rospy.Time.now()
     
-    def open_gripper(self):
-        """그리퍼 열기"""
-        if self.mode == 'real' and self.gripper:
-            success = self.gripper.open_gripper()
-            if success:
-                self.slider_updating = True
-                self.position = 1.0  # 열림
-                self.position_slider.setValue(255)
-                self.slider_updating = False
+    def update_state(self, event=None):
+        """주기적으로 상태 업데이트 및 발행"""
+        # 실제 그리퍼에서 상태 업데이트
+        if self.mode == 'real' and self.gripper and self.activated:
+            real_position = self.gripper.get_position()
+            self.position = float(real_position) / 255.0
+            
+            # 이동 상태 체크
+            if abs(self.position - self.target_position) < 0.02:
                 self.moving = False
-                self.activated = True
-                self.object_detected = False
-            else:
-                rospy.logwarn("그리퍼 열기 명령 실패")
-        else:
-            # 가상 모드에서는 즉시 위치 변경
-            self.slider_updating = True
-            self.position = 1.0  # 열림
-            self.position_slider.setValue(255)
-            self.slider_updating = False
-            self.moving = False
-            self.activated = True
-            self.object_detected = False
-        
-        self.update_ui()
-    
-    def close_gripper(self):
-        """그리퍼 닫기"""
-        if self.mode == 'real' and self.gripper:
-            success = self.gripper.close_gripper()
-            if success:
-                self.slider_updating = True
-                self.position = 0.0  # 닫힘
-                self.position_slider.setValue(0)
-                self.slider_updating = False
-                self.moving = False
-                self.activated = True
-                # 물체 감지는 실제 그리퍼에서 알 수 없으므로 변경하지 않음
-            else:
-                rospy.logwarn("그리퍼 닫기 명령 실패")
-        else:
-            # 가상 모드에서는 즉시 위치 변경 및 물체 감지 시뮬레이션
-            self.slider_updating = True
-            self.position = 0.0  # 닫힘
-            self.position_slider.setValue(0)
-            self.slider_updating = False
-            self.moving = False
-            self.activated = True
             
-            # 물체 감지 시뮬레이션 (닫힐 때 20% 확률로 물체 감지)
-            if rospy.Time.now().to_sec() % 10 < 2:
-                self.object_detected = True
+        # 가상 모드에서 위치 업데이트
+        elif self.mode == 'virtual' and self.movement_active:
+            current_time = rospy.Time.now()
+            elapsed = (current_time - self.movement_start_time).to_sec()
+            
+            # 0.5초 동안 이동 (선형 보간)
+            if elapsed < 0.5:
+                # 출발 위치에서 목표 위치로 선형 이동
+                progress = elapsed / 0.5  # 0.0 ~ 1.0
+                start_pos = self.position
+                self.position = start_pos + (self.target_position - start_pos) * progress
+                self.moving = True
             else:
-                self.object_detected = False
+                # 이동 완료
+                self.position = self.target_position
+                self.moving = False
+                self.movement_active = False
         
-        self.update_ui()
+        # 그리퍼 너비 발행 (위치 값을 미터 단위로 변환)
+        width = self.position * 0.025  # 최대 열림 폭 25mm = 0.025m
+        self.width_pub.publish(Float64(data=width))
+        
+        # Joint State 발행 - RViz 시각화를 위해 추가
+        self.publish_joint_state(width)
     
-    def update_ui(self):
-        """UI 상태 업데이트"""
-        # 위치 레이블 업데이트
-        self.update_position_label()
-        
-        # 물체 감지 레이블 업데이트
-        if self.object_detected:
-            self.object_label.setText("물체 감지: 있음")
-        else:
-            self.object_label.setText("물체 감지: 없음")
-    
-    def update_gripper_state(self):
-        """그리퍼 상태 업데이트 및 ROS 토픽 발행"""
-        # 상태 발행
-        self.publish_status()
-        self.update_ui()
-    
-    def publish_status(self):
-        """ROS 토픽으로 그리퍼 상태 발행"""
-        # 활성화 상태
-        self.activated_pub.publish(Bool(data=self.activated))
-        
-        # 이동 상태
-        self.moving_pub.publish(Bool(data=self.moving))
-        
-        # 위치 (0-255 범위)
-        pos_value = int(self.position * 255)
-        self.position_pub.publish(UInt8(data=pos_value))
-        
-        # 물체 감지 상태
-        obj_status = 0
-        if not self.activated:
-            obj_status = 0  # 비활성화
-        elif self.object_detected:
-            obj_status = 1  # 물체 감지
-        elif self.position <= 0.01:
-            obj_status = 2  # 최대 닫힘
-        elif self.position >= 0.99:
-            obj_status = 3  # 최대 열림
-        
-        self.object_pub.publish(UInt8(data=obj_status))
-        
-        # 조인트 상태 발행 (float64)
-        joint_pos = self.position * 0.025  # 최대 열림 폭 25mm
-        self.joint_state_pub.publish(Float64(data=joint_pos))
-        
-        # 로봇 조인트 상태에 그리퍼 조인트 추가 (JointState)
+    def publish_joint_state(self, width):
+        """Joint State 메시지 발행 (RViz 시각화용)"""
         joint_state = JointState()
         joint_state.header.stamp = rospy.Time.now()
+        
+        # 그리퍼 조인트 이름 (URDF에 정의된 이름과 일치해야 함)
         joint_state.name = ['gripper_robotiq_hande_left_finger_joint', 'gripper_robotiq_hande_right_finger_joint']
-        joint_state.position = [joint_pos, joint_pos]
-        joint_state.velocity = [0.0, 0.0]
-        joint_state.effort = [0.0, 0.0]
-        self.joint_states_pub.publish(joint_state)
+        
+        # 그리퍼 조인트 위치 (미터 단위)
+        joint_state.position = [width, width]  # 양쪽 손가락 동일하게 이동
+        
+        # 속도와 힘은 옵션 (생략 가능)
+        joint_state.velocity = []
+        joint_state.effort = []
+        
+        # Joint State 발행
+        self.joint_state_pub.publish(joint_state)
     
-    def closeEvent(self, event):
-        """창이 닫힐 때 호출되는 이벤트 핸들러"""
-        # 그리퍼 연결 종료
+    def run(self):
+        """그리퍼 드라이버 실행"""
+        rospy.loginfo("Hand-E 그리퍼 드라이버 실행 중...")
+        rospy.spin()
+    
+    def shutdown(self):
+        """종료 처리"""
         if self.mode == 'real' and self.gripper:
             self.gripper.close()
         
-        # 창 닫기 이벤트 수락
-        event.accept()
+        # 타이머 정지
+        if self.update_timer is not None:
+            self.update_timer.shutdown()
+        
+        rospy.loginfo("Hand-E 그리퍼 드라이버 종료")
 
 
 def main():
-    # QApplication 생성
-    app = QApplication(sys.argv)
-    
-    # SIGINT 핸들러 설정 (Ctrl+C로 종료할 수 있도록)
-    signal.signal(signal.SIGINT, signal.SIG_DFL)
-    
-    # GUI 생성 및 표시
-    gui = GripperControlGUI()
-    gui.show()
-    
-    # QApplication 이벤트 루프 실행
-    sys.exit(app.exec_())
+    try:
+        # 그리퍼 드라이버 생성 및 실행
+        driver = HandEGripperDriver()
+        
+        # 종료 핸들러 등록
+        rospy.on_shutdown(driver.shutdown)
+        
+        # 드라이버 실행
+        driver.run()
+        
+    except Exception as e:
+        rospy.logerr(f"그리퍼 드라이버 오류: {e}")
+        sys.exit(1)
 
 
 if __name__ == '__main__':

@@ -6,7 +6,7 @@ import os
 import signal
 import rospy
 import moveit_commander
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QMessageBox
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
 from test_package.robot_controller import URRobotController
@@ -31,6 +31,16 @@ def init_moveit():
         return False
 
 
+def check_gripper_service():
+    """그리퍼 서비스 연결 확인"""
+    try:
+        # 서비스 대기 (짧은 타임아웃)
+        rospy.wait_for_service('hande_gripper/control', timeout=2.0)
+        return True
+    except rospy.ROSException:
+        return False
+
+
 def main():
     # QApplication 생성
     app = QApplication(sys.argv)
@@ -50,6 +60,20 @@ def main():
     robot_ip = "192.168.56.101"  # 기본 IP (가상 모드)
     if len(sys.argv) > 1:
         robot_ip = sys.argv[1]
+    
+    # 그리퍼 서비스 확인
+    if not check_gripper_service():
+        # GUI 경고 창 표시
+        msg_box = QMessageBox()
+        msg_box.setIcon(QMessageBox.Warning)
+        msg_box.setText("그리퍼 서비스를 찾을 수 없습니다.")
+        msg_box.setInformativeText("hande_driver.py가 실행 중인지 확인하세요. 계속 진행할까요?")
+        msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg_box.setDefaultButton(QMessageBox.Yes)
+        
+        # 사용자 선택에 따라 계속 또는 종료
+        if msg_box.exec() == QMessageBox.No:
+            sys.exit(0)
     
     try:
         # 로봇 컨트롤러 초기화

@@ -1,16 +1,14 @@
 # Service to control the gripper
-uint8 POSITION=0
-uint8 SPEED=1
-uint8 FORCE=2
-uint8 ACTIVATE=3
-uint8 DEACTIVATE=4
-uint8 EMERGENCY_RELEASE=5
-uint8 STOP=6
+uint8 POSITION=0    # 위치 설정 (0-255)
+uint8 SPEED=1       # 속도 설정 (0-255)
+uint8 FORCE=2       # 힘 설정 (0-255)
+uint8 OPEN=3        # 그리퍼 열기
+uint8 CLOSE=4       # 그리퍼 닫기
 
 # Request
-uint8 command_type    # Command type (see constants above)
-uint8 value           # Value for position/speed/force (0-255)
+uint8 command_type  # 명령 유형 (위의 상수 참조)
+uint8 value         # 설정할 값 (0-255)
 ---
 # Response
-bool success          # Success flag
-string message        # Success or error message
+bool success        # 성공 여부
+string message      # 성공 또는 오류 메시지

@@ -469,7 +469,7 @@ class URControlGUI(QMainWindow):
     def update_planning_result(self, success, message):
         """계획 결과 업데이트"""
         self.log_label.setText(message)
-        
+        print(self.executing)
         # 계획 성공 시에만 실행 버튼 활성화 (실행 중이 아닐 때만)
         if not self.executing:
             self.execute_joint_button.setEnabled(success)

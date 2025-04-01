@@ -42,5 +42,6 @@ include_directories(
 # 파이썬 스크립트 설치
 catkin_install_python(PROGRAMS
   scripts/hande_driver.py
+  scripts/gripper_test.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

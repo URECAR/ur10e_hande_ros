@@ -409,7 +409,7 @@ class URControlGUI(QMainWindow):
         self.log_label = QLabel("시스템 준비 중...")
         self.log_label.setStyleSheet("background-color: #f0f0f0; padding: 5px; border: 1px solid #cccccc;")
         main_layout.addWidget(self.log_label)
-    
+
     def update_program_state(self, state):
         """UR 프로그램 상태 업데이트"""
         self.program_state_label.setText(f"프로그램 상태: {state}")

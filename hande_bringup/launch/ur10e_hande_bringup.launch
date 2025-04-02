@@ -24,8 +24,9 @@
     <group if="$(eval mode == 'real')">
         <include file="$(find realsense2_camera)/launch/rs_camera.launch">
             <arg name="enable_pointcloud" value="true"/>
+            <arg name="align_depth" value="true"/>
              </include>
         <node pkg="tf2_ros" type="static_transform_publisher" name="tool0_to_camera_link_publisher"
-              args="0.02 -0.06 0.058 0 -1.57 -1.67 tool0 camera_link" />
+              args="0.01 -0.06 0.046 1.57 -1.55 -3.24 tool0 camera_link" />
               </group>
 </launch>

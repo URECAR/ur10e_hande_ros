@@ -54,7 +54,7 @@ class URControlGUI(QMainWindow):
     def init_ui(self):
         """UI 초기화"""
         self.setWindowTitle('UR 로봇 및 그리퍼 제어')
-        self.setGeometry(100, 100, 200, 650)
+        self.setGeometry(100, 100, 100, 450)
         
         # 기본 폰트 설정
         default_font = QFont("Sans", 10)
@@ -113,7 +113,7 @@ class URControlGUI(QMainWindow):
             value_label = QLabel("0.00")
             value_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             value_label.setStyleSheet("background-color: #f0f0f0; padding: 3px; border: 1px solid #cccccc;")
-            value_label.setMinimumWidth(80)
+            value_label.setMinimumWidth(40)
             self.tcp_labels.append(value_label)
             tcp_grid.addWidget(value_label, row, col + 1)
         
@@ -200,16 +200,18 @@ class URControlGUI(QMainWindow):
         # 조인트 입력 필드 생성
         self.joint_inputs = []
         joint_names = ["베이스", "숄더", "엘보", "손목 1", "손목 2", "손목 3"]
-        
+
         for i, name in enumerate(joint_names):
-            joint_input_layout.addWidget(QLabel(f"{name} (°):"), i, 0)
+            row = i // 2  # 3개씩 나누어 행 계산
+            col = i % 2 * 3  # 각 조인트마다 2칸씩 사용 (라벨 + 입력필드)
+            
+            joint_input_layout.addWidget(QLabel(f"{name} (°):"), row, col)
             joint_input = QLineEdit("0.00")
             self.joint_inputs.append(joint_input)
-            joint_input_layout.addWidget(joint_input, i, 1)
-        
+            joint_input_layout.addWidget(joint_input, row, col + 1)
+
         joint_input_group.setLayout(joint_input_layout)
         joint_layout.addWidget(joint_input_group)
-        
         # 업데이트 버튼
         self.update_joint_button = QPushButton("FeedBack")
         self.update_joint_button.clicked.connect(self.update_joint_inputs)
@@ -274,13 +276,16 @@ class URControlGUI(QMainWindow):
         # TCP 입력 필드 생성
         self.tcp_inputs = []
         tcp_labels = ["X (mm)", "Y (mm)", "Z (mm)", "RX (°)", "RY (°)", "RZ (°)"]
-        
+
         for i, label in enumerate(tcp_labels):
-            tcp_input_layout.addWidget(QLabel(label), i, 0)
+            row = i // 2  # 3개씩 나누어 행 계산
+            col = i % 2 * 3  # 각 라벨과 입력필드 쌍마다 2칸씩 사용
+            
+            tcp_input_layout.addWidget(QLabel(label), row, col)
             tcp_input = QLineEdit("0.00")
             self.tcp_inputs.append(tcp_input)
-            tcp_input_layout.addWidget(tcp_input, i, 1)
-        
+            tcp_input_layout.addWidget(tcp_input, row, col + 1)
+
         tcp_input_group.setLayout(tcp_input_layout)
         tcp_layout.addWidget(tcp_input_group)
         

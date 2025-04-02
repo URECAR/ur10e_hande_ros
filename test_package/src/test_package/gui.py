@@ -213,7 +213,7 @@ class URControlGUI(QMainWindow):
         joint_input_group.setLayout(joint_input_layout)
         joint_layout.addWidget(joint_input_group)
         # 업데이트 버튼
-        self.update_joint_button = QPushButton("FeedBack")
+        self.update_joint_button = QPushButton("Update")
         self.update_joint_button.clicked.connect(self.update_joint_inputs)
         joint_layout.addWidget(self.update_joint_button)
         
@@ -289,10 +289,21 @@ class URControlGUI(QMainWindow):
         tcp_input_group.setLayout(tcp_input_layout)
         tcp_layout.addWidget(tcp_input_group)
         
-        # 업데이트 버튼
+        # 업데이트 및 카테시안 버튼 레이아웃
+        update_cartesian_layout = QHBoxLayout()
+
+        # 업데이트 버튼 (1x1로 줄임)
         self.update_tcp_button = QPushButton("Update")
         self.update_tcp_button.clicked.connect(self.update_tcp_inputs)
-        tcp_layout.addWidget(self.update_tcp_button)
+        update_cartesian_layout.addWidget(self.update_tcp_button)
+
+        # Cartesian 이동 계획 버튼
+        self.cartesian_tcp_button = QPushButton("Cartesian Plan")
+        self.cartesian_tcp_button.clicked.connect(self.plan_cartesian_movement)
+        self.cartesian_tcp_button.setToolTip("목표 지점까지 직선으로 이동하는 경로 계획")
+        update_cartesian_layout.addWidget(self.cartesian_tcp_button)
+
+        tcp_layout.addLayout(update_cartesian_layout)
         
         # 버튼 레이아웃
         tcp_button_layout = QHBoxLayout()
@@ -576,6 +587,22 @@ class URControlGUI(QMainWindow):
         # 계획 실행
         self.robot_controller.plan_pose_movement(tcp_values, velocity_scaling, accel_scaling)
     
+    def plan_cartesian_movement(self):
+        """Cartesian 직선 이동 계획"""
+        # 입력 필드에서 TCP 값 가져오기
+        tcp_values = [input_field.text() for input_field in self.tcp_inputs]
+        
+        # 속도 및 가속도 값 가져오기 (0-1 범위로 변환)
+        velocity_scaling = self.tcp_velocity_slider.value() / 100.0
+        accel_scaling = self.tcp_accel_slider.value() / 100.0
+        
+        # 로그 메시지 업데이트
+        self.log_label.setText("Cartesian 직선 이동 계획 중...")
+        self.log_label.setStyleSheet("color: black")
+        
+        # 계획 실행 (cartesian=True: Cartesian 직선 이동)
+        self.robot_controller.plan_pose_movement(tcp_values, velocity_scaling, accel_scaling, cartesian=True)
+
     def execute_plan(self):
         """현재 계획 실행"""
         # 실행 중이면 무시

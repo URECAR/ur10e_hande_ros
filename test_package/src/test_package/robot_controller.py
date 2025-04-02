@@ -3,6 +3,7 @@
 
 import rospy
 import time
+import copy
 from math import degrees, radians
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal, QThread
 from sensor_msgs.msg import JointState
@@ -19,10 +20,34 @@ class PlanningThread(QThread):
     def __init__(self, move_group, plan_type, values, velocity_scaling, acceleration_scaling):
         super().__init__()
         self.move_group = move_group
-        self.plan_type = plan_type  # 'joint' 또는 'pose'
+        self.plan_type = plan_type  # 'joint', 'pose', 또는 'cartesian'
         self.values = values
         self.velocity_scaling = velocity_scaling
         self.acceleration_scaling = acceleration_scaling
+    
+    def execute_cartesian_path(self, waypoints):
+        """카테시안 경로 실행 - 여러 번 시도하는 로직"""
+        max_attempts = 5
+        for attempt in range(max_attempts):
+            for eef_step in [0.001, 0.002, 0.004, 0.008]:  # 점진적으로 스텝 크기 증가
+                for jump_threshold in [0, 1.57]:  # 두 가지 점프 임계값 시도
+                    (plan, fraction) = self.move_group.compute_cartesian_path(
+                        waypoints, 
+                        eef_step, 
+                        jump_threshold, 
+                        avoid_collisions=False
+                    )
+                    if fraction == 1.0:  # 100% 경로 생성 성공
+                        rospy.loginfo(f"카테시안 경로 계획 성공: {attempt+1}회 시도, eef_step: {eef_step}, jump_threshold: {jump_threshold}")
+                        return (plan, fraction)
+                    elif fraction > 0.95:  # 95% 이상도 허용
+                        rospy.loginfo(f"카테시안 경로 부분 계획: {attempt+1}회 시도, {fraction:.2%} 커버, eef_step: {eef_step}, jump_threshold: {jump_threshold}")
+                        return (plan, fraction)
+            time.sleep(0.05)  # 다음 시도 전 잠시 대기
+        
+        # 모든 시도 실패
+        rospy.logerr("카테시안 경로 생성 실패: 목표 위치가 도달 가능한지 확인하세요.")
+        return (None, 0)
     
     def run(self):
         """스레드 실행 함수"""
@@ -38,7 +63,10 @@ class PlanningThread(QThread):
                 # 계획 그룹에 목표 조인트 값 설정
                 self.move_group.set_joint_value_target(joint_goal)
                 
-            elif self.plan_type == 'pose':
+                # 계획 생성
+                plan = self.move_group.plan()
+                
+            elif self.plan_type in ['pose', 'cartesian']:
                 # 위치와 방향 추출 (mm -> m 변환)
                 x, y, z, rx, ry, rz = [float(val) for val in self.values]
                 x /= 1000.0
@@ -59,11 +87,29 @@ class PlanningThread(QThread):
                 target_pose.orientation.z = quat[2]
                 target_pose.orientation.w = quat[3]
                 
-                # 계획 그룹에 목표 포즈 설정
-                self.move_group.set_pose_target(target_pose)
-            
-            # 계획 생성
-            plan = self.move_group.plan()
+                if self.plan_type == 'pose':
+                    # 일반 포즈 이동 계획 - 목표 포즈 설정
+                    self.move_group.set_pose_target(target_pose)
+                    plan = self.move_group.plan()
+                else:
+                    # Cartesian 경로 계획 - 직선 경로 계획
+                    # 현재 포즈에서 목표 포즈까지의 직선 경로 계획
+                    waypoints = [target_pose]
+                    
+                    # 향상된 Cartesian 경로 계획 기법 사용
+                    (plan, fraction) = self.execute_cartesian_path(waypoints)
+                    
+                    # 직선 경로 계획 성공 여부 판단
+                    if fraction >= 0.95:  # 95% 이상 경로를 계획했으면 성공
+                        success = True
+                        message = f"Cartesian 경로 계획 성공 ({fraction:.2%} 경로 커버)"
+                        self.planning_finished.emit(success, message, plan)
+                        return
+                    else:
+                        success = False
+                        message = f"Cartesian 경로 계획 실패 ({fraction:.2%} 경로만 커버)"
+                        self.planning_finished.emit(success, message, None)
+                        return
             
             # 계획 성공 확인 (반환 형식은 ROS 버전에 따라 다름)
             if isinstance(plan, tuple):
@@ -75,12 +121,28 @@ class PlanningThread(QThread):
                 # 이전 버전에서는 trajectory_msg만 반환하며, 비어있지 않으면 성공으로 간주
                 success = len(plan.joint_trajectory.points) > 0
             
-            message = f"{self.plan_type.capitalize()} 이동 계획 " + ("성공" if success else "실패")
+            # 결과 메시지 생성
+            if self.plan_type == 'joint':
+                message = f"조인트 이동 계획 " + ("성공" if success else "실패")
+            elif self.plan_type == 'pose':
+                message = f"TCP 이동 계획 " + ("성공" if success else "실패")
+            else:
+                message = f"알 수 없는 계획 유형 ({self.plan_type})"
+                
             self.planning_finished.emit(success, message, plan)
             
         except Exception as e:
-            self.planning_finished.emit(False, f"{self.plan_type.capitalize()} 이동 계획 오류: {str(e)}", None)
-
+            # 계획 타입에 맞는 에러 메시지 생성
+            if self.plan_type == 'joint':
+                error_msg = f"조인트 이동 계획 오류: {str(e)}"
+            elif self.plan_type == 'pose':
+                error_msg = f"TCP 이동 계획 오류: {str(e)}"
+            elif self.plan_type == 'cartesian':
+                error_msg = f"Cartesian 직선 이동 계획 오류: {str(e)}"
+            else:
+                error_msg = f"{self.plan_type.capitalize()} 이동 계획 오류: {str(e)}"
+                
+            self.planning_finished.emit(False, error_msg, None)
 
 class ExecutionThread(QThread):
     """로봇 계획 실행을 위한 스레드"""
@@ -227,18 +289,27 @@ class URRobotController(QObject):
         # 계획 진행 중임을 알림
         self.planning_result.emit(False, "조인트 이동 계획 진행 중...")
     
-    def plan_pose_movement(self, pose_values, velocity_scaling=0.25, acceleration_scaling=0.25):
-        """TCP 위치로 로봇 움직임 계획 (스레드 사용)"""
+    def plan_pose_movement(self, pose_values, velocity_scaling=0.25, acceleration_scaling=0.25, cartesian=False):
+        """TCP 위치로 로봇 움직임 계획 (스레드 사용)
+        
+        Args:
+            pose_values: 목표 포즈 값 (x, y, z, rx, ry, rz)
+            velocity_scaling: 속도 스케일링 (0-1)
+            acceleration_scaling: 가속도 스케일링 (0-1)
+            cartesian: True이면 직선 이동(Cartesian), False이면 일반 이동
+        """
+        # 계획 타입 설정 (cartesian 또는 pose)
+        plan_type = 'cartesian' if cartesian else 'pose'
+        
         # 계획 스레드 생성 및 시작
         self.planning_thread = PlanningThread(
-            self.move_group, 'pose', pose_values, velocity_scaling, acceleration_scaling
+            self.move_group, plan_type, pose_values, velocity_scaling, acceleration_scaling
         )
         self.planning_thread.planning_finished.connect(self._on_planning_finished)
         self.planning_thread.start()
         
         # 계획 진행 중임을 알림
-        self.planning_result.emit(False, "TCP 이동 계획 진행 중...")
-    
+        self.planning_result.emit(False, "Cartesian 직선 이동 계획 진행 중..." if cartesian else "TCP 이동 계획 진행 중...")
     def _on_planning_finished(self, success, message, plan):
         """계획 스레드 완료 콜백"""
         if success:

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
+import os
+import json
 import rospy
 import time
 import copy
@@ -222,8 +223,6 @@ class URRobotController(QObject):
             self.added_boxes = []
             
             # 로봇 작업 영역에 기본 상자 추가
-            self.add_box('workspace_box', [0, 0, 0], [0.795, 0.6, 1.0], center=True)
-            self.add_box('workspace_box2', [0.66, 0.055, 0.151], [0.50, 0.50, 1.151], center=True)
         except Exception as e:
             rospy.logerr(f"MoveIt 초기화 오류: {e}")
             raise
@@ -411,7 +410,7 @@ class URRobotController(QObject):
         # 추가했던 모든 상자 제거
         for box_name in self.added_boxes:
             try:
-                self.scene.remove_world_object(box_name)
+                # self.scene.remove_world_object(box_name)
                 rospy.loginfo(f"상자 제거: {box_name}")
             except Exception as e:
                 rospy.logerr(f"상자 제거 오류 ({box_name}): {e}")

@@ -8,9 +8,13 @@ import rospy
 import moveit_commander
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
+# 경로 설정
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
+
+# 필요한 모듈 임포트
 from test_package.robot_controller import URRobotController
 from test_package.gripper_controller import GripperController
+from test_package.pose_manager import PoseManager
 from test_package.gui import URControlGUI
 
 
@@ -39,6 +43,7 @@ def check_gripper_service():
         return True
     except rospy.ROSException:
         return False
+
 
 def cleanup_resources(robot_controller=None, gripper_controller=None):
     """프로그램 종료 시 리소스 정리"""
@@ -102,7 +107,10 @@ def main():
     try:
         # 로봇 컨트롤러 초기화
         robot_controller = URRobotController()
-        
+        robot_controller.add_box('workspace_box', [0, 0, 0], [0.795, 0.6, 1.0], center=True)
+        robot_controller.add_box('workspace_box2', [0.96, -0.136, 0.151], [0.50, 0.50, 1.151], center=True)
+        # robot_controller.add_box('workspace_box2', [0.66, 0.055, 0.151], [0.50, 0.50, 1.151], center=True)
+
         # 그리퍼 컨트롤러 초기화
         gripper_controller = GripperController(robot_ip)
         
@@ -118,7 +126,7 @@ def main():
     
     except Exception as e:
         rospy.logerr(f"초기화 오류: {e}")
-        cleanup_resources(robot_controller, gripper_controller)
+        cleanup_resources()
         sys.exit(1)
     
     finally:

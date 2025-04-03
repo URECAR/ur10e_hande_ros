@@ -4,7 +4,8 @@
 import time
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                            QLabel, QGroupBox, QGridLayout, QFrame, QPushButton, QLineEdit, 
-                           QTabWidget, QSlider)
+                           QTabWidget, QSlider, QListWidget, QInputDialog, QMessageBox, QDialog,
+                           QRadioButton, QDialogButtonBox)
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
 
@@ -19,12 +20,20 @@ class URControlGUI(QMainWindow):
         self.robot_controller = robot_controller
         self.gripper_controller = gripper_controller
         
+        # 포즈 관리자 초기화
+        from test_package.pose_manager import PoseManager
+        self.pose_manager = PoseManager()
+        
+        # 선택된 포즈 추적
+        self.selected_pose_name = None
+        
         # 신호 연결
         self.robot_controller.pose_updated.connect(self.update_pose_display)
         self.robot_controller.joints_updated.connect(self.update_joints_display)
         self.robot_controller.program_state_updated.connect(self.update_program_state)
         self.robot_controller.planning_result.connect(self.update_planning_result)
         self.gripper_controller.status_updated.connect(self.update_gripper_display)
+        self.pose_manager.pose_list_updated.connect(self.update_pose_list)
         
         # UI 초기화
         self.init_ui()
@@ -39,6 +48,7 @@ class URControlGUI(QMainWindow):
         # 실행 버튼 초기 비활성화
         self.execute_joint_button.setEnabled(False)
         self.execute_tcp_button.setEnabled(False)
+        self.execute_pose_button.setEnabled(False)
         
         # 실행 중 플래그
         self.executing = False
@@ -54,7 +64,7 @@ class URControlGUI(QMainWindow):
     def init_ui(self):
         """UI 초기화"""
         self.setWindowTitle('UR 로봇 및 그리퍼 제어')
-        self.setGeometry(100, 100, 100, 450)
+        self.setGeometry(100, 100, 200, 500)
         
         # 기본 폰트 설정
         default_font = QFont("Sans", 10)
@@ -212,6 +222,7 @@ class URControlGUI(QMainWindow):
 
         joint_input_group.setLayout(joint_input_layout)
         joint_layout.addWidget(joint_input_group)
+        
         # 업데이트 버튼
         self.update_joint_button = QPushButton("Update")
         self.update_joint_button.clicked.connect(self.update_joint_inputs)
@@ -319,12 +330,15 @@ class URControlGUI(QMainWindow):
         tcp_layout.addLayout(tcp_button_layout)
         self.control_tabs.addTab(tcp_tab, "TCP 이동")
         
+        # 포즈 지정 탭 추가 (새로 추가)
+        pose_tab = self.create_pose_tab()
+        self.control_tabs.addTab(pose_tab, "포즈 지정")
+        
         robot_layout.addWidget(self.control_tabs)
         
         # 로봇 탭 추가
         self.tabs.addTab(robot_tab, "로봇 제어")
         
-        # 그리퍼 탭 생성
         # 그리퍼 탭 생성
         gripper_tab = QWidget()
         gripper_layout = QVBoxLayout(gripper_tab)
@@ -383,7 +397,7 @@ class URControlGUI(QMainWindow):
         gripper_param_group.setLayout(gripper_param_layout)
         gripper_layout.addWidget(gripper_param_group)
         
-    # 그리퍼 위치 제어 그룹 (버튼 대신 텍스트 상자 사용)
+        # 그리퍼 위치 제어 그룹 (버튼 대신 텍스트 상자 사용)
         gripper_control_group = QGroupBox("위치 제어")
         gripper_control_layout = QVBoxLayout()
 
@@ -414,6 +428,7 @@ class URControlGUI(QMainWindow):
         gripper_control_layout.addLayout(slider_layout)
         gripper_control_group.setLayout(gripper_control_layout)
         gripper_layout.addWidget(gripper_control_group)    
+        
         # 그리퍼 탭에 레이아웃 설정 및 탭에 추가
         gripper_tab.setLayout(gripper_layout)
         self.tabs.addTab(gripper_tab, "그리퍼 제어")
@@ -425,7 +440,102 @@ class URControlGUI(QMainWindow):
         self.log_label = QLabel("시스템 준비 중...")
         self.log_label.setStyleSheet("background-color: #f0f0f0; padding: 5px; border: 1px solid #cccccc;")
         main_layout.addWidget(self.log_label)
+    
 
+    def create_pose_tab(self):
+        pose_tab = QWidget()
+        pose_layout = QVBoxLayout(pose_tab)
+        
+        # 포즈 탭 상단 (속도/가속도 슬라이더)
+        pose_slider_group = QGroupBox("속도 및 가속도 설정")
+        pose_slider_layout = QGridLayout()
+        
+        # 속도 슬라이더
+        pose_slider_layout.addWidget(QLabel("속도:"), 0, 0)
+        self.pose_velocity_slider = QSlider(Qt.Horizontal)
+        self.pose_velocity_slider.setRange(1, 100)
+        self.pose_velocity_slider.setValue(25)
+        self.pose_velocity_slider.setTickPosition(QSlider.TicksBelow)
+        self.pose_velocity_slider.setTickInterval(10)
+        self.pose_velocity_value = QLabel("25%")
+        self.pose_velocity_slider.valueChanged.connect(
+            lambda value: self.pose_velocity_value.setText(f"{value}%")
+        )
+        pose_slider_layout.addWidget(self.pose_velocity_slider, 0, 1)
+        pose_slider_layout.addWidget(self.pose_velocity_value, 0, 2)
+        
+        # 가속도 슬라이더
+        pose_slider_layout.addWidget(QLabel("가속도:"), 1, 0)
+        self.pose_accel_slider = QSlider(Qt.Horizontal)
+        self.pose_accel_slider.setRange(1, 100)
+        self.pose_accel_slider.setValue(25)
+        self.pose_accel_slider.setTickPosition(QSlider.TicksBelow)
+        self.pose_accel_slider.setTickInterval(10)
+        self.pose_accel_value = QLabel("25%")
+        self.pose_accel_slider.valueChanged.connect(
+            lambda value: self.pose_accel_value.setText(f"{value}%")
+        )
+        pose_slider_layout.addWidget(self.pose_accel_slider, 1, 1)
+        pose_slider_layout.addWidget(self.pose_accel_value, 1, 2)
+        
+        pose_slider_group.setLayout(pose_slider_layout)
+        pose_layout.addWidget(pose_slider_group)
+        
+        # 포즈 목록 및 제어 부분
+        pose_list_group = QGroupBox("저장된 포즈 목록")
+        pose_list_layout = QVBoxLayout()
+        
+        # 포즈 목록 리스트 위젯
+        self.pose_list_widget = QListWidget()
+        self.pose_list_widget.setSelectionMode(QListWidget.SingleSelection)
+        self.pose_list_widget.itemClicked.connect(self.on_pose_selected)
+        pose_list_layout.addWidget(self.pose_list_widget)
+        
+        # 선택된 포즈 정보 표시
+        self.pose_info_label = QLabel("선택된 포즈: 없음")
+        self.pose_info_label.setStyleSheet("font-weight: bold;")
+        pose_list_layout.addWidget(self.pose_info_label)
+        
+        # 포즈 작업 버튼 레이아웃
+        pose_manage_layout = QHBoxLayout()
+        
+        # 새 포즈 추가 버튼
+        self.add_pose_button = QPushButton("현재 위치 추가")
+        self.add_pose_button.clicked.connect(self.add_current_pose)
+        pose_manage_layout.addWidget(self.add_pose_button)
+        
+        # 포즈 삭제 버튼
+        self.delete_pose_button = QPushButton("포즈 삭제")
+        self.delete_pose_button.clicked.connect(self.delete_selected_pose)
+        pose_manage_layout.addWidget(self.delete_pose_button)
+        
+        pose_list_layout.addLayout(pose_manage_layout)
+        pose_list_group.setLayout(pose_list_layout)
+        pose_layout.addWidget(pose_list_group)
+        
+        # 포즈 이동 제어 버튼 (하단)
+        pose_layout.addLayout(self.create_pose_control_layout())
+        
+        return pose_tab
+        
+    # 포즈 이동 제어 버튼 (하단)
+    def create_pose_control_layout(self):
+        pose_control_layout = QHBoxLayout()
+        
+        # 통합된 계획 버튼
+        self.plan_pose_button = QPushButton("계획 (Plan)")
+        self.plan_pose_button.clicked.connect(self.plan_selected_pose)
+        self.plan_pose_button.setEnabled(False)
+        pose_control_layout.addWidget(self.plan_pose_button)
+        
+        # 실행 버튼
+        self.execute_pose_button = QPushButton("실행 (Execute)")
+        self.execute_pose_button.clicked.connect(self.execute_plan)
+        self.execute_pose_button.setEnabled(False)
+        pose_control_layout.addWidget(self.execute_pose_button)
+        
+        return pose_control_layout
+    
     def update_program_state(self, state):
         """UR 프로그램 상태 업데이트"""
         self.program_state_label.setText(f"프로그램 상태: {state}")
@@ -485,10 +595,12 @@ class URControlGUI(QMainWindow):
     def update_planning_result(self, success, message):
         """계획 결과 업데이트"""
         self.log_label.setText(message)
+        
         # 계획 성공 시에만 실행 버튼 활성화 (실행 중이 아닐 때만)
         if not self.executing:
             self.execute_joint_button.setEnabled(success)
             self.execute_tcp_button.setEnabled(success)
+            self.execute_pose_button.setEnabled(success)
         
         if success:
             self.log_label.setStyleSheet("color: green")
@@ -500,7 +612,11 @@ class URControlGUI(QMainWindow):
             self.executing = False
             self.plan_joint_button.setEnabled(True)
             self.plan_tcp_button.setEnabled(True)
-    
+            self.plan_pose_button.setEnabled(True)
+            
+            # 포즈 실행 버튼 관련 업데이트
+            if self.selected_pose_name:
+                self.plan_pose_button.setEnabled(True)
 
     def update_gripper_display(self, status):
         """그리퍼 상태 업데이트 (물체 감지 포함)"""
@@ -601,7 +717,7 @@ class URControlGUI(QMainWindow):
         
         # 계획 실행 (cartesian=True: Cartesian 직선 이동)
         self.robot_controller.plan_pose_movement(tcp_values, velocity_scaling, accel_scaling, cartesian=True)
-
+    
     def execute_plan(self):
         """현재 계획 실행"""
         # 실행 중이면 무시
@@ -615,12 +731,200 @@ class URControlGUI(QMainWindow):
         # 실행 버튼 비활성화
         self.execute_joint_button.setEnabled(False)
         self.execute_tcp_button.setEnabled(False)
+        self.execute_pose_button.setEnabled(False)
         
         # 계획 실행
         self.robot_controller.execute_plan()
         
         # 실행 중 플래그 설정
         self.executing = True
+    
+    def update_pose_list(self, pose_names):
+        """포즈 목록 업데이트"""
+        # 현재 선택된 항목 기억
+        current_selected = self.pose_list_widget.currentItem()
+        selected_name = current_selected.text() if current_selected else None
+        
+        # 목록 초기화
+        self.pose_list_widget.clear()
+        
+        # 포즈 목록 추가
+        for name in pose_names:
+            self.pose_list_widget.addItem(name)
+        
+        # 이전에 선택한 항목 다시 선택
+        if selected_name:
+            items = self.pose_list_widget.findItems(selected_name, Qt.MatchExactly)
+            if items:
+                self.pose_list_widget.setCurrentItem(items[0])
+    
+    def on_pose_selected(self, item):
+        """포즈 선택 처리"""
+        pose_name = item.text()
+        self.selected_pose_name = pose_name
+        
+        # 포즈 정보 가져오기
+        pose_data = self.pose_manager.get_pose(pose_name)
+        if pose_data:
+            # 포즈 타입 및 값 표시
+            pose_type = "조인트" if pose_data["type"] == "joint" else "TCP"
+            values_str = ", ".join([f"{val:.2f}" for val in pose_data["values"]])
+            self.pose_info_label.setText(f"선택된 포즈: {pose_name} ({pose_type} - {values_str})")
+            
+            # 버튼 활성화
+            self.plan_pose_button.setEnabled(True)
+        else:
+            self.pose_info_label.setText(f"선택된 포즈: {pose_name} (정보 없음)")
+            # 버튼 비활성화
+            self.plan_pose_button.setEnabled(False)
+    
+    def plan_selected_pose(self):
+        """선택된 포즈로 이동 계획 - 통합된 계획 함수"""
+        if not self.selected_pose_name:
+            self.log_label.setText("포즈를 먼저 선택해주세요.")
+            return
+        
+        pose_data = self.pose_manager.get_pose(self.selected_pose_name)
+        if not pose_data:
+            self.log_label.setText("포즈 데이터가 없습니다.")
+            return
+        
+        # 슬라이더에서 속도 및 가속도 값 가져오기
+        velocity_scaling = self.pose_velocity_slider.value() / 100.0
+        accel_scaling = self.pose_accel_slider.value() / 100.0
+        
+        # 포즈 타입에 따라 계획 생성 방식 선택
+        if pose_data["type"] == "joint":
+            # 조인트 포즈는 선택지 없이 바로 계획
+            self.log_label.setText(f"포즈 '{self.selected_pose_name}'로 조인트 이동 계획 중...")
+            self.robot_controller.plan_joint_movement(pose_data["values"], velocity_scaling, accel_scaling)
+        else:
+            # TCP 포즈는 계획 방식 선택 다이얼로그 표시
+            class PlanTypeDialog(QDialog):
+                def __init__(self, parent=None):
+                    super().__init__(parent)
+                    self.setWindowTitle("계획 방식 선택")
+                    self.resize(300, 150)
+                    
+                    layout = QVBoxLayout(self)
+                    
+                    # 라디오 버튼 그룹
+                    self.regular_radio = QRadioButton("일반 계획")
+                    self.regular_radio.setChecked(True)
+                    self.cartesian_radio = QRadioButton("Cartesian 직선 계획")
+                    
+                    layout.addWidget(self.regular_radio)
+                    layout.addWidget(self.cartesian_radio)
+                    
+                    # 버튼 박스
+                    button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+                    button_box.accepted.connect(self.accept)
+                    button_box.rejected.connect(self.reject)
+                    
+                    layout.addWidget(button_box)
+                
+                def use_cartesian(self):
+                    return self.cartesian_radio.isChecked()
+            
+            # 계획 방식 선택 다이얼로그 표시
+            plan_dialog = PlanTypeDialog(self)
+            if plan_dialog.exec_() == QDialog.Accepted:
+                use_cartesian = plan_dialog.use_cartesian()
+                
+                if use_cartesian:
+                    # Cartesian 직선 계획
+                    self.log_label.setText(f"포즈 '{self.selected_pose_name}'로 Cartesian 직선 이동 계획 중...")
+                    self.robot_controller.plan_pose_movement(
+                        pose_data["values"], velocity_scaling, accel_scaling, cartesian=True
+                    )
+                else:
+                    # 일반 TCP 계획
+                    self.log_label.setText(f"포즈 '{self.selected_pose_name}'로 TCP 이동 계획 중...")
+                    self.robot_controller.plan_pose_movement(
+                        pose_data["values"], velocity_scaling, accel_scaling, cartesian=False
+                    )
+    
+    def add_current_pose(self):
+        """현재 로봇 위치를 포즈로 저장"""
+        # 포즈 이름 입력 대화상자
+        pose_name, ok = QInputDialog.getText(self, "포즈 추가", "새 포즈 이름:")
+        if ok and pose_name:
+            # 포즈 타입 선택
+            class PoseTypeDialog(QDialog):
+                def __init__(self, parent=None):
+                    super().__init__(parent)
+                    self.setWindowTitle("포즈 타입 선택")
+                    self.resize(300, 150)
+                    
+                    layout = QVBoxLayout(self)
+                    
+                    # 라디오 버튼 그룹
+                    self.joint_radio = QRadioButton("조인트 포즈")
+                    self.joint_radio.setChecked(True)
+                    self.tcp_radio = QRadioButton("TCP 포즈")
+                    
+                    layout.addWidget(self.joint_radio)
+                    layout.addWidget(self.tcp_radio)
+                    
+                    # 버튼 박스
+                    button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+                    button_box.accepted.connect(self.accept)
+                    button_box.rejected.connect(self.reject)
+                    
+                    layout.addWidget(button_box)
+                
+                def get_pose_type(self):
+                    return "joint" if self.joint_radio.isChecked() else "tcp"
+            
+            # 포즈 타입 선택 다이얼로그 표시
+            type_dialog = PoseTypeDialog(self)
+            if type_dialog.exec_() == QDialog.Accepted:
+                pose_type = type_dialog.get_pose_type()
+                
+                # 현재 값 가져오기
+                if pose_type == "joint":
+                    values = self.current_joints
+                else:
+                    values = self.current_tcp
+                
+                # 포즈 추가
+                success, message = self.pose_manager.add_pose(pose_name, pose_type, values)
+                
+                # 결과 표시
+                if success:
+                    self.log_label.setText(message)
+                    self.log_label.setStyleSheet("color: green;")
+                else:
+                    self.log_label.setText(message)
+                    self.log_label.setStyleSheet("color: red;")
+    
+    def delete_selected_pose(self):
+        """선택된 포즈 삭제"""
+        if not self.selected_pose_name:
+            self.log_label.setText("삭제할 포즈를 먼저 선택해주세요.")
+            return
+        
+        # 삭제 확인 대화상자
+        reply = QMessageBox.question(
+            self, "포즈 삭제",
+            f"포즈 '{self.selected_pose_name}'을(를) 삭제하시겠습니까?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            # 포즈 삭제
+            success, message = self.pose_manager.delete_pose(self.selected_pose_name)
+            
+            # 결과 표시
+            if success:
+                self.log_label.setText(message)
+                self.log_label.setStyleSheet("color: green;")
+                self.selected_pose_name = None
+                self.pose_info_label.setText("선택된 포즈: 없음")
+                self.plan_pose_button.setEnabled(False)
+            else:
+                self.log_label.setText(message)
+                self.log_label.setStyleSheet("color: red;")
     
     def closeEvent(self, event):
         """창이 닫힐 때 호출되는 이벤트 핸들러"""

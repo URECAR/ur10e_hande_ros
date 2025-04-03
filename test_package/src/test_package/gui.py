@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 import time
 import os
 import json
@@ -12,6 +11,8 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
 
+# Import our new camera tab
+from test_package.camera_tab import CameraTab
 
 class URControlGUI(QMainWindow):
     """UR 로봇 제어 및 모니터링 GUI"""
@@ -462,6 +463,10 @@ class URControlGUI(QMainWindow):
         # 그리퍼 탭에 레이아웃 설정 및 탭에 추가
         gripper_tab.setLayout(gripper_layout)
         self.tabs.addTab(gripper_tab, "그리퍼 제어")
+        
+        # 카메라 탭 생성 및 추가
+        camera_tab = CameraTab()
+        self.tabs.addTab(camera_tab, "카메라")
         
         # 탭 위젯을 메인 레이아웃에 추가
         main_layout.addWidget(self.tabs)
@@ -999,4 +1004,6 @@ class URControlGUI(QMainWindow):
         
         # 이벤트 수락
         event.accept()
+
+
 

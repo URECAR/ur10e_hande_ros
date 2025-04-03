@@ -45,6 +45,25 @@ def check_gripper_service():
         return False
 
 
+def check_camera_topics():
+    """카메라 토픽 확인"""
+    topics = ['/camera/color/image_raw', '/camera/depth/image_rect_raw']
+    # 잠시 대기 (토픽 검색 시간)
+    rospy.sleep(0.5)
+    
+    # 실제 토픽 목록 가져오기
+    published_topics = dict(rospy.get_published_topics())
+    
+    # 필요한 토픽이 있는지 확인
+    missing_topics = [t for t in topics if t not in published_topics]
+    
+    if missing_topics:
+        rospy.logwarn(f"카메라 토픽을 찾을 수 없습니다: {', '.join(missing_topics)}")
+        return False
+    
+    return True
+
+
 def cleanup_resources(robot_controller=None, gripper_controller=None):
     """프로그램 종료 시 리소스 정리"""
     if robot_controller:
@@ -95,8 +114,22 @@ def main():
         # GUI 경고 창 표시
         msg_box = QMessageBox()
         msg_box.setIcon(QMessageBox.Warning)
-        msg_box.setText("그리퍼 서비스를 찾을 수 없습니다.")
+        msg_box.setText("그리퍼 서비스를: /hande_gripper/control'를 찾을 수 없습니다.")
         msg_box.setInformativeText("hande_driver.py가 실행 중인지 확인하세요. 계속 진행할까요?")
+        msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg_box.setDefaultButton(QMessageBox.Yes)
+        
+        # 사용자 선택에 따라 계속 또는 종료
+        if msg_box.exec() == QMessageBox.No:
+            sys.exit(0)
+    
+    # 카메라 토픽 확인
+    if not check_camera_topics():
+        # GUI 경고 창 표시
+        msg_box = QMessageBox()
+        msg_box.setIcon(QMessageBox.Warning)
+        msg_box.setText("카메라 관련 토픽을 찾을 수 없습니다.")
+        msg_box.setInformativeText("Realsense 카메라 노드가 실행 중인지 확인하세요.\n카메라 기능을 사용하지 않고 계속할까요?")
         msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         msg_box.setDefaultButton(QMessageBox.Yes)
         
@@ -108,7 +141,7 @@ def main():
         # 로봇 컨트롤러 초기화
         robot_controller = URRobotController()
         robot_controller.add_box('workspace_box', [0, 0, 0], [0.795, 0.6, 1.0], center=True)
-        robot_controller.add_box('workspace_box2', [0.96, -0.136, 0.151], [0.50, 0.50, 1.151], center=True)
+        robot_controller.add_box('workspace_box2', [0.6, 0.066, 0.151], [0.50, 0.50, 1.151], center=True)
         # robot_controller.add_box('workspace_box2', [0.66, 0.055, 0.151], [0.50, 0.50, 1.151], center=True)
 
         # 그리퍼 컨트롤러 초기화

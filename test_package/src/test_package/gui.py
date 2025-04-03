@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 
 import time
+import os
+import json
+import rospy
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                            QLabel, QGroupBox, QGridLayout, QFrame, QPushButton, QLineEdit, 
                            QTabWidget, QSlider, QListWidget, QInputDialog, QMessageBox, QDialog,
@@ -33,7 +36,6 @@ class URControlGUI(QMainWindow):
         self.robot_controller.program_state_updated.connect(self.update_program_state)
         self.robot_controller.planning_result.connect(self.update_planning_result)
         self.gripper_controller.status_updated.connect(self.update_gripper_display)
-        self.pose_manager.pose_list_updated.connect(self.update_pose_list)
         
         # UI 초기화
         self.init_ui()
@@ -60,7 +62,24 @@ class URControlGUI(QMainWindow):
         
         # 로그 메시지 초기화
         self.log_label.setText("시스템 준비 완료.")
+        
+        # 시작 시 좌표 업데이트 타이머 (1회 실행)
+        QTimer.singleShot(2000, self.initial_update)
+        
+        # 포즈 목록 로딩 연결 (포즈 관리자 초기화 후 목록 로딩)
+        self.pose_manager.pose_list_updated.connect(self.update_pose_list)
+        
+        # 수동으로 포즈 목록 업데이트 호출
+        QTimer.singleShot(1000, lambda: self.update_pose_list(self.pose_manager.get_pose_names()))
+        
+        # 계획 및 실행 완료 후 자동 업데이트를 위한 플래그
+        self.auto_update_after_movement = True
     
+    def initial_update(self):
+        """GUI 초기화 후 조인트 및 TCP 값을 입력 필드에 설정"""
+        self.update_joint_inputs()
+        self.update_tcp_inputs()
+
     def init_ui(self):
         """UI 초기화"""
         self.setWindowTitle('UR 로봇 및 그리퍼 제어')
@@ -111,9 +130,8 @@ class URControlGUI(QMainWindow):
         tcp_names = ["X:", "Y:", "Z:", "RX:", "RY:", "RZ:"]
         
         for i, name in enumerate(tcp_names):
-            row = i // 2
-            col = i % 2 * 2  # 각 항목은 2칸씩 차지 (이름 + 값)
-            
+            row = i % 3  # 3개씩 세로로 배치
+            col = i // 3 * 3  # 2열씩 배치 (라벨 + 입력필드)
             # 이름 레이블
             name_label = QLabel(name)
             name_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -123,7 +141,7 @@ class URControlGUI(QMainWindow):
             value_label = QLabel("0.00")
             value_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             value_label.setStyleSheet("background-color: #f0f0f0; padding: 3px; border: 1px solid #cccccc;")
-            value_label.setMinimumWidth(40)
+            value_label.setMinimumWidth(70)
             self.tcp_labels.append(value_label)
             tcp_grid.addWidget(value_label, row, col + 1)
         
@@ -140,8 +158,8 @@ class URControlGUI(QMainWindow):
         joint_names = ["베이스:", "숄더:", "엘보:", "손목 1:", "손목 2:", "손목 3:"]
         
         for i, name in enumerate(joint_names):
-            row = i // 2
-            col = i % 2 * 2  # 각 항목은 2칸씩 차지 (이름 + 값)
+            row = i % 3
+            col = i // 3 * 3  # 각 항목은 2칸씩 차지 (이름 + 값)
             
             # 이름 레이블
             name_label = QLabel(name)
@@ -152,7 +170,7 @@ class URControlGUI(QMainWindow):
             value_label = QLabel("0.00")
             value_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             value_label.setStyleSheet("background-color: #f0f0f0; padding: 3px; border: 1px solid #cccccc;")
-            value_label.setMinimumWidth(80)
+            value_label.setMinimumWidth(70)
             self.joint_labels.append(value_label)
             joints_grid.addWidget(value_label, row, col + 1)
         
@@ -204,7 +222,7 @@ class URControlGUI(QMainWindow):
         joint_slider_group.setLayout(joint_slider_layout)
         joint_layout.addWidget(joint_slider_group)
         
-        joint_input_group = QGroupBox("조인트 공간 이동 (movej)")
+        joint_input_group = QGroupBox("조인트 공간 이동")
         joint_input_layout = QGridLayout()
         
         # 조인트 입력 필드 생성
@@ -212,10 +230,10 @@ class URControlGUI(QMainWindow):
         joint_names = ["베이스", "숄더", "엘보", "손목 1", "손목 2", "손목 3"]
 
         for i, name in enumerate(joint_names):
-            row = i // 2  # 3개씩 나누어 행 계산
-            col = i % 2 * 3  # 각 조인트마다 2칸씩 사용 (라벨 + 입력필드)
-            
-            joint_input_layout.addWidget(QLabel(f"{name} (°):"), row, col)
+            row = i % 3  # 3개씩 세로로 배치
+            col = i // 3 * 3  # 2열씩 배치 (라벨 + 입력필드)
+
+            joint_input_layout.addWidget(QLabel(f"{name} :"), row, col)
             joint_input = QLineEdit("0.00")
             self.joint_inputs.append(joint_input)
             joint_input_layout.addWidget(joint_input, row, col + 1)
@@ -240,7 +258,7 @@ class URControlGUI(QMainWindow):
         joint_button_layout.addWidget(self.execute_joint_button)
         
         joint_layout.addLayout(joint_button_layout)
-        self.control_tabs.addTab(joint_tab, "조인트 이동")
+        self.control_tabs.addTab(joint_tab, "Movej")
         
         # TCP 이동 탭
         tcp_tab = QWidget()
@@ -281,16 +299,16 @@ class URControlGUI(QMainWindow):
         tcp_slider_group.setLayout(tcp_slider_layout)
         tcp_layout.addWidget(tcp_slider_group)
         
-        tcp_input_group = QGroupBox("TCP 이동 (moveTCP)")
+        tcp_input_group = QGroupBox("공간 좌표 이동")
         tcp_input_layout = QGridLayout()
         
         # TCP 입력 필드 생성
         self.tcp_inputs = []
-        tcp_labels = ["X (mm)", "Y (mm)", "Z (mm)", "RX (°)", "RY (°)", "RZ (°)"]
+        tcp_labels = ["X: ", "Y: ", "Z: ", "RX: ", "RY: ", "RZ: "]
 
         for i, label in enumerate(tcp_labels):
-            row = i // 2  # 3개씩 나누어 행 계산
-            col = i % 2 * 3  # 각 라벨과 입력필드 쌍마다 2칸씩 사용
+            row = i % 3  # 3개씩 나누어 행 계산
+            col = i // 3 * 3  # 각 라벨과 입력필드 쌍마다 2칸씩 사용
             
             tcp_input_layout.addWidget(QLabel(label), row, col)
             tcp_input = QLineEdit("0.00")
@@ -328,7 +346,7 @@ class URControlGUI(QMainWindow):
         tcp_button_layout.addWidget(self.execute_tcp_button)
         
         tcp_layout.addLayout(tcp_button_layout)
-        self.control_tabs.addTab(tcp_tab, "TCP 이동")
+        self.control_tabs.addTab(tcp_tab, "Movex")
         
         # 포즈 지정 탭 추가 (새로 추가)
         pose_tab = self.create_pose_tab()
@@ -607,7 +625,7 @@ class URControlGUI(QMainWindow):
         else:
             self.log_label.setStyleSheet("color: red")
         
-        # 실행 완료 후에는 계획 버튼 활성화
+        # 실행 완료 후에는 계획 버튼 활성화 및 좌표 자동 업데이트
         if "실행" in message and "성공" in message:
             self.executing = False
             self.plan_joint_button.setEnabled(True)
@@ -617,6 +635,11 @@ class URControlGUI(QMainWindow):
             # 포즈 실행 버튼 관련 업데이트
             if self.selected_pose_name:
                 self.plan_pose_button.setEnabled(True)
+            
+            # 움직임 완료 후 입력 필드 자동 업데이트
+            if self.auto_update_after_movement:
+                QTimer.singleShot(500, self.update_joint_inputs)  # 0.5초 후 조인트 업데이트
+                QTimer.singleShot(500, self.update_tcp_inputs)    # 0.5초 후 TCP 업데이트
 
     def update_gripper_display(self, status):
         """그리퍼 상태 업데이트 (물체 감지 포함)"""
@@ -767,9 +790,9 @@ class URControlGUI(QMainWindow):
         pose_data = self.pose_manager.get_pose(pose_name)
         if pose_data:
             # 포즈 타입 및 값 표시
-            pose_type = "조인트" if pose_data["type"] == "joint" else "TCP"
+            pose_type = "posj" if pose_data["type"] == "joint" else "posx"
             values_str = ", ".join([f"{val:.2f}" for val in pose_data["values"]])
-            self.pose_info_label.setText(f"선택된 포즈: {pose_name} ({pose_type} - {values_str})")
+            self.pose_info_label.setText(f"{pose_type} - {values_str}")
             
             # 버튼 활성화
             self.plan_pose_button.setEnabled(True)
@@ -941,3 +964,4 @@ class URControlGUI(QMainWindow):
         
         # 이벤트 수락
         event.accept()
+

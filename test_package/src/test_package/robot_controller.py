@@ -24,18 +24,24 @@ class PlanningThread(QThread):
         self.values = values
         self.velocity_scaling = velocity_scaling
         self.acceleration_scaling = acceleration_scaling
-    
+        self.move_group.set_max_velocity_scaling_factor(self.velocity_scaling)
+        self.move_group.set_max_acceleration_scaling_factor(self.acceleration_scaling)
     def execute_cartesian_path(self, waypoints):
         """카테시안 경로 실행 - 여러 번 시도하는 로직"""
         max_attempts = 5
+        
+        # 속도에 따른 eef_step 조정 (더 느린 속도일 경우 더 작은 스텝으로)
+        base_eef_step = 0.004  # 기본 스텝 크기
+        scaled_step = base_eef_step * max(0.2, self.velocity_scaling)  # 최소 스텝 크기 보장
+        
         for attempt in range(max_attempts):
-            for eef_step in [0.001, 0.002, 0.004, 0.008]:  # 점진적으로 스텝 크기 증가
+            for eef_step in [scaled_step, scaled_step*2]:  # 조정된 스텝 크기 사용
                 for jump_threshold in [0, 1.57]:  # 두 가지 점프 임계값 시도
                     (plan, fraction) = self.move_group.compute_cartesian_path(
                         waypoints, 
                         eef_step, 
                         jump_threshold, 
-                        avoid_collisions=False
+                        avoid_collisions=True  # 충돌 회피 사용
                     )
                     if fraction == 1.0:  # 100% 경로 생성 성공
                         rospy.loginfo(f"카테시안 경로 계획 성공: {attempt+1}회 시도, eef_step: {eef_step}, jump_threshold: {jump_threshold}")
@@ -301,6 +307,13 @@ class URRobotController(QObject):
         # 계획 타입 설정 (cartesian 또는 pose)
         plan_type = 'cartesian' if cartesian else 'pose'
         
+        # Cartesian 속도 제한 설정 (직선 이동의 경우)
+        if cartesian:
+            # max_cartesian_speed를 m/s 단위로 설정 (예: 0.1 m/s)
+            # velocity_scaling은 0-1 사이의 값이므로 적절한 최대값을 곱합니다
+            max_cartesian_speed = 0.25 * velocity_scaling  # 최대 0.25 m/s
+            self.move_group.limit_max_cartesian_link_speed(max_cartesian_speed)
+        
         # 계획 스레드 생성 및 시작
         self.planning_thread = PlanningThread(
             self.move_group, plan_type, pose_values, velocity_scaling, acceleration_scaling
@@ -310,6 +323,7 @@ class URRobotController(QObject):
         
         # 계획 진행 중임을 알림
         self.planning_result.emit(False, "Cartesian 직선 이동 계획 진행 중..." if cartesian else "TCP 이동 계획 진행 중...")
+        
     def _on_planning_finished(self, success, message, plan):
         """계획 스레드 완료 콜백"""
         if success:

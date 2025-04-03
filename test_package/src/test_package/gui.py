@@ -384,6 +384,18 @@ class URControlGUI(QMainWindow):
         gripper_status_group.setLayout(gripper_status_layout)
         gripper_layout.addWidget(gripper_status_group)
         
+        gripper_init_group = QGroupBox("그리퍼 관리")
+        gripper_init_layout = QVBoxLayout()
+        
+        self.init_gripper_button = QPushButton("그리퍼 초기화")
+        self.init_gripper_button.setToolTip("그리퍼가 응답하지 않을 때 초기화합니다 (Modbus RTU 프로토콜 사용)")
+        self.init_gripper_button.clicked.connect(self.initialize_gripper)
+        self.init_gripper_button.setStyleSheet("background-color: #ffeeee; font-weight: bold;")
+        gripper_init_layout.addWidget(self.init_gripper_button)
+        
+        gripper_init_group.setLayout(gripper_init_layout)
+        gripper_layout.addWidget(gripper_init_group)
+
         # 그리퍼 파라미터 그룹
         gripper_param_group = QGroupBox("그리퍼 파라미터")
         gripper_param_layout = QGridLayout()
@@ -693,6 +705,29 @@ class URControlGUI(QMainWindow):
         """그리퍼 닫기 버튼 클릭"""
         self.gripper_controller.close_gripper()
     
+    def initialize_gripper(self):
+        """그리퍼 초기화 버튼 클릭 처리"""
+        # 확인 대화 상자 표시
+        reply = QMessageBox.question(
+            self, "그리퍼 초기화",
+            "그리퍼를 초기화하시겠습니까?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            self.log_label.setText("그리퍼 초기화 중...")
+            self.log_label.setStyleSheet("color: black;")
+            
+            # 실제 초기화 실행
+            success = self.gripper_controller.reset_gripper()
+            
+            if success:
+                self.log_label.setText("그리퍼 초기화 성공")
+                self.log_label.setStyleSheet("color: green;")
+            else:
+                self.log_label.setText("그리퍼 초기화 실패")
+                self.log_label.setStyleSheet("color: red;")
+
     def plan_joint_movement(self):
         """조인트 공간 이동 계획"""
         # 입력 필드에서 조인트 값 가져오기

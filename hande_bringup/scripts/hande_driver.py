@@ -273,6 +273,67 @@ class RobotiqHandEGripper:
         """그리퍼 완전히 닫기"""
         return self.send_command(255)  # 255 = 완전 닫힘
     
+    def reset_gripper(self):
+        """그리퍼 초기화/리셋 - Modbus RTU 프로토콜 직접 사용
+        
+        Returns:
+            bool: 초기화 성공 여부
+        """
+        if not self.connected:
+            return False
+        
+        try:
+            with self.lock:
+                # 1단계: 비활성화 명령 (rACT=0)
+                # 명령 데이터: 비활성화를 위한 모든 비트를 0으로 설정
+                deactivate_data = bytearray([0, 0, 0, 0, 0, 0])
+                deactivate_cmd = ModbusRTU.create_command(
+                    self.SLAVE_ID, 0x10, self.REG_COMMAND, deactivate_data, 3)
+                
+                rospy.loginfo("그리퍼 비활성화 명령 전송...")
+                self.serial.write(deactivate_cmd)
+                response = self.serial.read(8)  # 응답은 8바이트
+                
+                # 응답 확인
+                if len(response) != 8 or response[0] != self.SLAVE_ID or response[1] != 0x10:
+                    rospy.logerr("비활성화 응답 오류")
+                    return False
+                
+                # 잠시 대기
+                time.sleep(0.5)
+                
+                # 2단계: 활성화 명령 (rACT=1)
+                # 문서에 나온 정확한 명령 사용: 09 10 03 E8 00 03 06 01 00 00 00 00 00 (+ CRC)
+                # 명령 데이터: 첫 바이트만 1(rACT), 나머지 0
+                activate_data = bytearray([1, 0, 0, 0, 0, 0])
+                activate_cmd = ModbusRTU.create_command(
+                    self.SLAVE_ID, 0x10, self.REG_COMMAND, activate_data, 3)
+                
+                rospy.loginfo("그리퍼 활성화 명령 전송...")
+                self.serial.write(activate_cmd)
+                response = self.serial.read(8)  # 응답은 8바이트
+                
+                # 응답 확인
+                if len(response) != 8 or response[0] != self.SLAVE_ID or response[1] != 0x10:
+                    rospy.logerr("활성화 응답 오류")
+                    return False
+                
+                # 상태 확인 기다림
+                time.sleep(1.0)
+                status = self.get_status()
+                
+                if status and status.get('activated', False):
+                    rospy.loginfo("그리퍼 초기화 성공")
+                    self.activated = True
+                    return True
+                else:
+                    rospy.logerr("그리퍼 초기화 후 활성화 상태 확인 실패")
+                    return False
+                    
+        except Exception as e:
+            rospy.logerr(f"그리퍼 초기화 중 오류 발생: {str(e)}")
+            return False
+    
     def get_status(self):
         """그리퍼 상태 읽기"""
         if not self.connected:
@@ -437,6 +498,30 @@ class HandEGripperDriver:
             rospy.logwarn(f"실제 그리퍼 상태 업데이트 오류: {e}")
             return False
     
+    def reset_gripper(self):
+        """그리퍼 초기화/리셋 - Modbus RTU 프로토콜 사용"""
+        if self.mode != 'real' or not self.gripper:
+            # 가상 모드에서는 항상 성공한 것으로 처리
+            rospy.loginfo("가상 모드에서 그리퍼 초기화 시뮬레이션")
+            self.activated = True
+            return True
+        
+        try:
+            # 실제 그리퍼 초기화
+            success = self.gripper.reset_gripper()
+            
+            if success:
+                # 상태 변수 업데이트
+                self.activated = True
+                rospy.loginfo("그리퍼 초기화 성공")
+            else:
+                rospy.logerr("그리퍼 초기화 실패")
+            
+            return success
+        except Exception as e:
+            rospy.logerr(f"그리퍼 초기화 중 오류 발생: {str(e)}")
+            return False
+
     def handle_control_service(self, req):
         """그리퍼 제어 서비스 핸들러"""
         response = GripperControlResponse()
@@ -516,6 +601,16 @@ class HandEGripperDriver:
                 
                 response.success = success
                 response.message = f"그리퍼 닫기 {'성공' if success else '실패'}"
+                
+            elif req.command_type == 5:  # RESET/INITIALIZE
+                rospy.loginfo("그리퍼 초기화/리셋 명령 수신")
+                success = self.reset_gripper()
+                
+                response.success = success
+                if success:
+                    response.message = "그리퍼 초기화 성공"
+                else:
+                    response.message = "그리퍼 초기화 실패"
             
             else:
                 response.success = False

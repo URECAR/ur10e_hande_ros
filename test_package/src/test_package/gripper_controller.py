@@ -184,6 +184,31 @@ class GripperController(QObject):
             self.moving = True
         return success
     
+    def reset_gripper(self):
+        """그리퍼 초기화/리셋"""
+        if self.control_service is None:
+            rospy.logwarn("그리퍼 서비스에 연결되어 있지 않습니다")
+            self.try_reconnect_service()
+            return False
+        
+        try:
+            req = GripperControlRequest()
+            req.command_type = 5  # RESET
+            req.value = 0  # 미사용
+            
+            rospy.loginfo("그리퍼 초기화 명령 전송")
+            resp = self.control_service(req)
+            
+            if resp.success:
+                rospy.loginfo("그리퍼 초기화 성공")
+            else:
+                rospy.logwarn(f"그리퍼 초기화 실패: {resp.message}")
+            
+            return resp.success
+        except Exception as e:
+            rospy.logerr(f"그리퍼 초기화 중 오류 발생: {e}")
+            return False
+
     def close(self):
         """컨트롤러 종료"""
         # 타이머 정지

@@ -4,6 +4,7 @@ uint8 SPEED=1       # 속도 설정 (0-255)
 uint8 FORCE=2       # 힘 설정 (0-255)
 uint8 OPEN=3        # 그리퍼 열기
 uint8 CLOSE=4       # 그리퍼 닫기
+uint8 RESET=5       # 그리퍼 초기화/리셋
 
 # Request
 uint8 command_type  # 명령 유형 (위의 상수 참조)

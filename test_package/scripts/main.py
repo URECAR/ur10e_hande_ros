@@ -17,6 +17,10 @@ from test_package.gripper_controller import GripperController
 from test_package.pose_manager import PoseManager
 from test_package.gui import URControlGUI
 
+# 소켓 관련 모듈 임포트
+from test_package.socket_manager import SocketManager
+from test_package.socket_tab import SocketTab
+
 
 def init_ros_node():
     """ROS 노드 초기화"""
@@ -64,8 +68,14 @@ def check_camera_topics():
     return True
 
 
-def cleanup_resources(robot_controller=None, gripper_controller=None):
+def cleanup_resources(robot_controller=None, gripper_controller=None, socket_manager=None):
     """프로그램 종료 시 리소스 정리"""
+    if socket_manager:
+        try:
+            socket_manager.stop_server()
+        except Exception as e:
+            rospy.logerr(f"소켓 매니저 정리 중 오류: {e}")
+    
     if robot_controller:
         try:
             robot_controller.cleanup()  # 작업 상자 제거
@@ -142,17 +152,25 @@ def main():
         robot_controller = URRobotController()
         robot_controller.add_box('workspace_box', [0, 0, 0], [0.795, 0.6, 1.0], center=True)
         robot_controller.add_box('workspace_box2', [0.6, 0.066, 0.151], [0.50, 0.50, 1.151], center=True)
-        # robot_controller.add_box('workspace_box2', [0.66, 0.055, 0.151], [0.50, 0.50, 1.151], center=True)
 
         # 그리퍼 컨트롤러 초기화
         gripper_controller = GripperController(robot_ip)
         
-        # GUI 생성 및 표시
-        gui = URControlGUI(robot_controller, gripper_controller)
+        # 소켓 매니저 초기화
+        socket_manager = SocketManager(robot_controller, gripper_controller)
+        
+        # GUI 생성 (소켓 매니저 전달)
+        gui = URControlGUI(robot_controller, gripper_controller, socket_manager)
+        
+        # 소켓 탭 생성 및 추가
+        socket_tab = SocketTab(socket_manager)
+        gui.tabs.addTab(socket_tab, "소켓 통신")
+        
+        # GUI 표시
         gui.show()
 
         # 종료 시 정리 함수 등록
-        app.aboutToQuit.connect(lambda: cleanup_resources(robot_controller, gripper_controller))
+        app.aboutToQuit.connect(lambda: cleanup_resources(robot_controller, gripper_controller, socket_manager))
 
         # QApplication 이벤트 루프 실행
         sys.exit(app.exec_())

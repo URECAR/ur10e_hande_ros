@@ -17,12 +17,13 @@ from test_package.camera_tab import CameraTab
 class URControlGUI(QMainWindow):
     """UR 로봇 제어 및 모니터링 GUI"""
     
-    def __init__(self, robot_controller, gripper_controller):
+    def __init__(self, robot_controller, gripper_controller, socket_manager=None):
         super().__init__()
         
         # 컨트롤러 참조 저장
         self.robot_controller = robot_controller
         self.gripper_controller = gripper_controller
+        self.socket_manager = socket_manager
         
         # 포즈 관리자 초기화
         from test_package.pose_manager import PoseManager
@@ -37,6 +38,10 @@ class URControlGUI(QMainWindow):
         self.robot_controller.program_state_updated.connect(self.update_program_state)
         self.robot_controller.planning_result.connect(self.update_planning_result)
         self.gripper_controller.status_updated.connect(self.update_gripper_display)
+        
+        # 소켓 매니저 신호 연결 (있는 경우)
+        if self.socket_manager:
+            self.socket_manager.connection_state_changed.connect(self.on_socket_connection_changed)
         
         # UI 초기화
         self.init_ui()
@@ -840,6 +845,37 @@ class URControlGUI(QMainWindow):
             self.pose_info_label.setText(f"선택된 포즈: {pose_name} (정보 없음)")
             # 버튼 비활성화
             self.plan_pose_button.setEnabled(False)
+ 
+    def on_socket_connection_changed(self, connected):
+        """소켓 연결 상태 변경 처리"""
+        # 소켓이 연결되면 UI 컨트롤 비활성화 (소켓 탭 제외)
+        current_tab_index = self.tabs.currentIndex()
+        socket_tab_index = self.tabs.count() - 1  # 소켓 탭이 마지막에 추가된 경우
+        
+        if connected:
+            # 소켓 연결되면 소켓 탭을 제외한 다른 탭 비활성화
+            for i in range(self.tabs.count()):
+                if i != socket_tab_index:
+                    self.tabs.setTabEnabled(i, False)
+            
+            # 소켓 탭으로 자동 전환
+            self.tabs.setCurrentIndex(socket_tab_index)
+            
+            # 상태 메시지 업데이트
+            self.log_label.setText("소켓 서버가 연결되었습니다. 소켓 모드에서는 다른 탭이 비활성화됩니다.")
+            self.log_label.setStyleSheet("color: blue;")
+        else:
+            # 소켓 연결 해제되면 모든 탭 활성화
+            for i in range(self.tabs.count()):
+                self.tabs.setTabEnabled(i, True)
+            
+            # 원래 탭으로 돌아가기 (소켓 탭이었다면 그대로 유지)
+            if current_tab_index == socket_tab_index:
+                self.tabs.setCurrentIndex(0)  # 첫 번째 탭으로 이동
+            
+            # 상태 메시지 업데이트
+            self.log_label.setText("소켓 서버가 해제되었습니다. 모든 기능이 활성화되었습니다.")
+            self.log_label.setStyleSheet("color: black;")
     
     def plan_selected_pose(self):
         """선택된 포즈로 이동 계획 - 통합된 계획 함수"""

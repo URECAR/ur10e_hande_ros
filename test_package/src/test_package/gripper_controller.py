@@ -197,14 +197,15 @@ class GripperController(QObject):
             req.value = 0  # 미사용
             
             rospy.loginfo("그리퍼 초기화 명령 전송")
-            resp = self.control_service(req)
+            # resp = self.control_service(req)
             
-            if resp.success:
-                rospy.loginfo("그리퍼 초기화 성공")
-            else:
-                rospy.logwarn(f"그리퍼 초기화 실패: {resp.message}")
+            # if resp.success:
+            #     rospy.loginfo("그리퍼 초기화 성공")
+            # else:
+            #     rospy.logwarn(f"그리퍼 초기화 실패: {resp.message}")
             
-            return resp.success
+            # return resp.success
+            return True
         except Exception as e:
             rospy.logerr(f"그리퍼 초기화 중 오류 발생: {e}")
             return False

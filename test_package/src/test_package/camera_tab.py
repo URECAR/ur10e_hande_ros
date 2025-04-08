@@ -10,7 +10,7 @@ from cv_bridge import CvBridge, CvBridgeError
 import tf2_ros
 import tf2_geometry_msgs
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                           QGroupBox, QGridLayout)
+                           QGroupBox, QGridLayout, QPushButton, QFrame)
 from PyQt5.QtGui import QImage, QPixmap, QColor
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QPoint, QSize, QRect
 
@@ -72,7 +72,7 @@ class ImageDisplayWidget(QLabel):
 
 
 class CameraTab(QWidget):
-    """카메라 탭 위젯"""
+    """카메라 탭 위젯 - 개선된 버전"""
     
     def __init__(self):
         super().__init__()
@@ -85,72 +85,73 @@ class CameraTab(QWidget):
         self.last_mouse_pos = QPoint(0, 0)
         self.pixel_depth = None
         self.world_point = None
+        
+        # 이미지 표시 모드 (0: 컬러, 1: 깊이)
+        self.display_mode = 0
+        
         self.init_ui()
         self.setup_subscribers()
         self.update_timer = QTimer(self)
         self.update_timer.timeout.connect(self.update_displays)
         self.update_timer.start(100)
-        rospy.loginfo("카메라 탭 초기화 완료 - 정렬된 깊이 이미지 사용")
+        rospy.loginfo("카메라 탭 초기화 완료 - 개선된 인터페이스")
     
     def init_ui(self):
         """UI 초기화"""
         main_layout = QVBoxLayout(self)
-        self.setFixedSize(1000, 1000)
-        split_layout = QHBoxLayout()
-        split_layout.setSpacing(10)
+        main_layout.setContentsMargins(10, 10, 10, 10)
         
-        # 왼쪽: 이미지 표시 영역
+        # 이미지 표시 그룹
+        image_group = QGroupBox("카메라 이미지")
         image_layout = QVBoxLayout()
-        image_layout.setContentsMargins(5, 5, 5, 5)
         
-        # 컬러 이미지 그룹
-        color_group = QGroupBox("컬러 이미지")
-        color_group.setFixedSize(660, 520)
-        color_layout = QVBoxLayout()
-        self.color_view = ImageDisplayWidget()
-        self.color_view.mouse_moved.connect(self.on_mouse_moved)
-        color_layout.addWidget(self.color_view)
-        color_group.setLayout(color_layout)
-        image_layout.addWidget(color_group)
+        # 이미지 표시 위젯
+        self.image_view = ImageDisplayWidget()
+        self.image_view.mouse_moved.connect(self.on_mouse_moved)
+        image_layout.addWidget(self.image_view)
         
-        # 깊이 이미지 그룹
-        depth_group = QGroupBox("깊이 이미지")
-        depth_group.setFixedSize(660, 520)
-        depth_layout = QVBoxLayout()
-        self.depth_view = QLabel()
-        self.depth_view.setAlignment(Qt.AlignCenter)
-        self.depth_view.setFixedSize(640, 480)
-        self.depth_view.setStyleSheet("background-color: black;")
-        depth_layout.addWidget(self.depth_view)
-        depth_group.setLayout(depth_layout)
-        image_layout.addWidget(depth_group)
+        # 이미지 라벨 (현재 표시 중인 이미지 타입)
+        self.image_type_label = QLabel("컬러 이미지")
+        self.image_type_label.setStyleSheet("font-weight: bold; color: #3366cc;")
+        self.image_type_label.setAlignment(Qt.AlignCenter)
+        image_layout.addWidget(self.image_type_label)
         
-        split_layout.addLayout(image_layout, 3)
+        image_group.setLayout(image_layout)
+        main_layout.addWidget(image_group)
         
-        # 오른쪽: 포인터 정보만 표시
-        info_layout = QVBoxLayout()
-        info_widget = QWidget()
-        info_widget.setFixedWidth(300)
-        info_widget.setLayout(info_layout)
+        # 좌표 및 제어 패널 (하단에 한 줄로 배치)
+        control_frame = QFrame()
+        control_frame.setFrameShape(QFrame.StyledPanel)
+        control_frame.setFrameShadow(QFrame.Raised)
+        control_layout = QHBoxLayout(control_frame)
+        control_layout.setContentsMargins(5, 5, 5, 5)
         
-        # 마우스 정보 그룹
-        mouse_group = QGroupBox("포인터 정보")
-        mouse_layout = QGridLayout()
+        # 이미지 좌표 표시
+        self.img_coord_label = QLabel("이미지: (-,-)")
+        control_layout.addWidget(self.img_coord_label)
         
-        mouse_layout.addWidget(QLabel("이미지 좌표:"), 0, 0)
-        self.mouse_pos_label = QLabel("(-, -)")
-        mouse_layout.addWidget(self.mouse_pos_label, 0, 1)
+        # 월드 좌표 표시
+        self.world_coord_label = QLabel("월드: (-,-,-)")
+        self.world_coord_label.setStyleSheet("font-weight: bold;")
+        control_layout.addWidget(self.world_coord_label)
         
-        mouse_layout.addWidget(QLabel("월드 좌표:"), 1, 0)
-        self.world_coord_label = QLabel("(-, -, -)")
-        self.world_coord_label.setStyleSheet("font-weight: bold; color: #009900;")
-        mouse_layout.addWidget(self.world_coord_label, 1, 1)
+        # 깊이 값 표시
+        self.depth_label = QLabel("깊이: - mm")
+        control_layout.addWidget(self.depth_label)
         
-        mouse_group.setLayout(mouse_layout)
-        info_layout.addWidget mouse_group)
+        # 공간 확보를 위한 스페이서
+        control_layout.addStretch(1)
         
-        split_layout.addWidget(info_widget, 1)
-        main_layout.addLayout(split_layout)
+        # 필터 변환 버튼
+        self.filter_button = QPushButton("깊이 이미지 보기")
+        self.filter_button.clicked.connect(self.toggle_display_mode)
+        control_layout.addWidget(self.filter_button)
+        
+        main_layout.addWidget(control_frame)
+        
+        # 전체 크기 설정
+        self.setMinimumSize(660, 600)
+        self.setMaximumSize(800, 700)
     
     def setup_subscribers(self):
         """ROS 토픽 구독 설정"""
@@ -195,6 +196,17 @@ class CameraTab(QWidget):
         self.last_mouse_pos = pos
         QTimer.singleShot(0, self.update_depth_value)
     
+    def toggle_display_mode(self):
+        """이미지 표시 모드 전환"""
+        self.display_mode = 1 - self.display_mode  # 0과 1 사이 전환
+        
+        if self.display_mode == 0:
+            self.image_type_label.setText("컬러 이미지")
+            self.filter_button.setText("깊이 이미지 보기")
+        else:
+            self.image_type_label.setText("깊이 이미지")
+            self.filter_button.setText("컬러 이미지 보기")
+    
     def pixel_to_world(self, x, y, depth):
         """픽셀 좌표와 깊이를 월드 좌표로 변환"""
         if self.camera_info is None or depth <= 0:
@@ -228,51 +240,59 @@ class CameraTab(QWidget):
         """마우스 위치의 깊이 값 및 월드 좌표 업데이트"""
         if self.depth_image is None or self.color_image is None:
             return
-        img_coords = self.color_view.getImageCoordinates(self.last_mouse_pos)
+        img_coords = self.image_view.getImageCoordinates(self.last_mouse_pos)
         if img_coords is None:
             self.pixel_depth = None
             self.world_point = None
-            self.world_coord_label.setText("(-, -, -)")
-            self.mouse_pos_label.setText("이미지 영역 밖")
+            self.world_coord_label.setText("월드: (-,-,-)")
+            self.img_coord_label.setText("이미지: (-,-)")
+            self.depth_label.setText("깊이: - mm")
             return
         img_x, img_y = img_coords
         if (img_x < 0 or img_x >= self.depth_image.shape[1] or
             img_y < 0 or img_y >= self.depth_image.shape[0]):
             self.pixel_depth = None
             self.world_point = None
-            self.world_coord_label.setText("(-, -, -)")
-            self.mouse_pos_label.setText(f"({img_x}, {img_y}) - 범위 초과")
+            self.world_coord_label.setText("월드: (-,-,-)")
+            self.img_coord_label.setText(f"이미지: ({img_x},{img_y})")
+            self.depth_label.setText("깊이: - mm")
             return
         depth_val = self.depth_image[img_y, img_x]
         depth_m = depth_val / 1000.0 if depth_val > 0 else 0.0
         if depth_m > 0 and depth_m < 10:
             self.pixel_depth = depth_m
-            self.mouse_pos_label.setText(f"({img_x}, {img_y})")
+            self.img_coord_label.setText(f"이미지: ({img_x},{img_y})")
+            self.depth_label.setText(f"깊이: {int(depth_val)} mm")
+            
             world_point = self.pixel_to_world(img_x, img_y, depth_m)
             self.world_point = world_point
             if world_point:
                 x_mm = world_point.x * 1000
                 y_mm = world_point.y * 1000
                 z_mm = world_point.z * 1000
-                self.world_coord_label.setText(f"({x_mm:.1f}, {y_mm:.1f}, {z_mm:.1f}) mm")
+                self.world_coord_label.setText(f"월드: ({x_mm:.0f},{y_mm:.0f},{z_mm:.0f})mm")
             else:
-                self.world_coord_label.setText("변환 실패")
+                self.world_coord_label.setText("월드: 변환 실패")
         else:
             self.pixel_depth = None
             self.world_point = None
-            self.world_coord_label.setText("(-, -, -)")
-            self.mouse_pos_label.setText(f"({img_x}, {img_y})")
+            self.world_coord_label.setText("월드: (-,-,-)")
+            self.img_coord_label.setText(f"이미지: ({img_x},{img_y})")
+            self.depth_label.setText("깊이: - mm")
             
     def update_displays(self):
         """디스플레이 업데이트"""
-        if self.color_image is not None:
+        if self.display_mode == 0 and self.color_image is not None:
+            # 컬러 이미지 표시
             rgb_image = cv2.cvtColor(self.color_image, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb_image.shape
             bytes_per_line = ch * w
             qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
             pixmap = QPixmap.fromImage(qt_image)
-            self.color_view.setPixmap(pixmap)
-        if self.depth_image is not None:
+            self.image_view.setPixmap(pixmap)
+            
+        elif self.display_mode == 1 and self.depth_image is not None:
+            # 깊이 이미지 표시
             try:
                 depth_norm = self.depth_image.astype(np.float32) / 1000.0
                 mask = (depth_norm > 0.1) & (depth_norm < 5.0)
@@ -288,7 +308,7 @@ class CameraTab(QWidget):
                 bytes_per_line = ch * w
                 qt_depth = QImage(depth_colormap.data, w, h, bytes_per_line, QImage.Format_RGB888)
                 pixmap = QPixmap.fromImage(qt_depth)
-                self.depth_view.setPixmap(pixmap)
+                self.image_view.setPixmap(pixmap)
             except Exception as e:
                 rospy.logerr(f"깊이 이미지 시각화 오류: {e}")
     

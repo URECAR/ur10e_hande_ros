@@ -297,7 +297,7 @@ class CameraTab(QWidget):
         self.filter_enabled = enabled
         
         if enabled:
-            self.filter_info_label.setText(f"필터: 활성화 ({self.get_filter_range_text()})")
+            self.filter_info_label.setText(f"필터: 활성화")
             # 필터 활성화 시 바로 적용
             self.apply_filter()
         else:
@@ -317,7 +317,7 @@ class CameraTab(QWidget):
         self.z_max = self.z_max_input.value()
         
         if self.filter_enabled:
-            self.filter_info_label.setText(f"필터: 활성화 ({self.get_filter_range_text()})")
+            self.filter_info_label.setText(f"필터: 활성화")
             
             # 파라미터 변경 후 일정 시간 후에만 필터 적용
             if hasattr(self, 'filter_timer'):

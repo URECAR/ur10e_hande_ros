@@ -92,7 +92,8 @@ class URControlGUI(QMainWindow):
         self.setGeometry(100, 100, 200, 500)
         
         # 기본 폰트 설정
-        default_font = QFont("Sans", 10)
+
+        default_font = QFont("NanumGothic", 10)
         self.setFont(default_font)
         
         # 메인 위젯 및 레이아웃

@@ -43,5 +43,6 @@ include_directories(
 catkin_install_python(PROGRAMS
   scripts/hande_driver.py
   scripts/gripper_test.py
+  scripts/interactive_marker.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

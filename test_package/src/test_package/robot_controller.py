@@ -42,7 +42,7 @@ class PlanningThread(QThread):
                         waypoints, 
                         eef_step, 
                         jump_threshold, 
-                        avoid_collisions=True  # 충돌 회피 사용
+                        # avoid_collisions=True  # 충돌 회피 사용
                     )
                     if fraction == 1.0:  # 100% 경로 생성 성공
                         rospy.loginfo(f"카테시안 경로 계획 성공: {attempt+1}회 시도, eef_step: {eef_step}, jump_threshold: {jump_threshold}")

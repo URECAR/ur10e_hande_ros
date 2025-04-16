@@ -17,13 +17,12 @@ from test_package.camera_tab import CameraTab
 class URControlGUI(QMainWindow):
     """UR 로봇 제어 및 모니터링 GUI"""
     
-    def __init__(self, robot_controller, gripper_controller, socket_manager=None):
+    def __init__(self, robot_controller, gripper_controller):
         super().__init__()
         
         # 컨트롤러 참조 저장
         self.robot_controller = robot_controller
         self.gripper_controller = gripper_controller
-        self.socket_manager = socket_manager
         
         # 포즈 관리자 초기화
         from test_package.pose_manager import PoseManager
@@ -38,11 +37,7 @@ class URControlGUI(QMainWindow):
         self.robot_controller.program_state_updated.connect(self.update_program_state)
         self.robot_controller.planning_result.connect(self.update_planning_result)
         self.gripper_controller.status_updated.connect(self.update_gripper_display)
-        
-        # 소켓 매니저 신호 연결 (있는 경우)
-        if self.socket_manager:
-            self.socket_manager.connection_state_changed.connect(self.on_socket_connection_changed)
-        
+
         # UI 초기화
         self.init_ui()
         

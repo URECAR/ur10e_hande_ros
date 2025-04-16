@@ -8,41 +8,37 @@ import rospy
 import moveit_commander
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
-# 경로 설정
+# Add path to the package source
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
 
-# 필요한 모듈 임포트
+# Import required modules
 from test_package.robot_controller import URRobotController
 from test_package.gripper_controller import GripperController
 from test_package.pose_manager import PoseManager
-from test_package.gui import URControlGUI
-
-# 소켓 관련 모듈 임포트
-from test_package.socket_manager import SocketManager
-from test_package.socket_tab import SocketTab
+from test_package.gui import URControlGUI  # Assuming you'll update this to remove socket-related code
 
 
 def init_ros_node():
-    """ROS 노드 초기화"""
+    """Initialize ROS node"""
     if not rospy.core.is_initialized():
         rospy.init_node('ur_gripper_controller', anonymous=True)
 
 
 def init_moveit():
-    """MoveIt 초기화"""
+    """Initialize MoveIt"""
     try:
         moveit_commander.roscpp_initialize(sys.argv)
-        rospy.loginfo("MoveIt Commander 초기화 성공")
+        rospy.loginfo("MoveIt Commander initialized successfully")
         return True
     except Exception as e:
-        rospy.logerr(f"MoveIt Commander 초기화 실패: {e}")
+        rospy.logerr(f"MoveIt Commander initialization failed: {e}")
         return False
 
 
 def check_gripper_service():
-    """그리퍼 서비스 연결 확인"""
+    """Check if gripper service is available"""
     try:
-        # 서비스 대기 (짧은 타임아웃)
+        # Wait for service with short timeout
         rospy.wait_for_service('hande_gripper/control', timeout=2.0)
         return True
     except rospy.ROSException:
@@ -50,49 +46,43 @@ def check_gripper_service():
 
 
 def check_camera_topics():
-    """카메라 토픽 확인"""
+    """Check if camera topics are available"""
     topics = ['/camera/color/image_raw', '/camera/depth/image_rect_raw']
-    # 잠시 대기 (토픽 검색 시간)
+    # Wait briefly to allow topic discovery
     rospy.sleep(0.5)
     
-    # 실제 토픽 목록 가져오기
+    # Get published topics
     published_topics = dict(rospy.get_published_topics())
     
-    # 필요한 토픽이 있는지 확인
+    # Check if required topics are available
     missing_topics = [t for t in topics if t not in published_topics]
     
     if missing_topics:
-        rospy.logwarn(f"카메라 토픽을 찾을 수 없습니다: {', '.join(missing_topics)}")
+        rospy.logwarn(f"Camera topics not found: {', '.join(missing_topics)}")
         return False
     
     return True
 
 
-def cleanup_resources(robot_controller=None, gripper_controller=None, socket_manager=None):
-    """프로그램 종료 시 리소스 정리"""
-    if socket_manager:
-        try:
-            socket_manager.stop_server()
-        except Exception as e:
-            rospy.logerr(f"소켓 매니저 정리 중 오류: {e}")
-    
+def cleanup_resources(robot_controller=None, gripper_controller=None):
+    """Clean up resources when the program exits"""
     if robot_controller:
         try:
-            robot_controller.cleanup()  # 작업 상자 제거
+            robot_controller.cleanup()  # Remove workspace boxes
         except Exception as e:
-            rospy.logerr(f"로봇 컨트롤러 정리 중 오류: {e}")
+            rospy.logerr(f"Error cleaning up robot controller: {e}")
     
     if gripper_controller:
         try:
             gripper_controller.close()
         except Exception as e:
-            rospy.logerr(f"그리퍼 컨트롤러 정리 중 오류: {e}")
+            rospy.logerr(f"Error cleaning up gripper controller: {e}")
     
-    # ROS 종료
+    # Shutdown ROS if it's still running
     if not rospy.is_shutdown():
         rospy.signal_shutdown("Application closed")
     
-    # MoveIt 종료
+    # Shutdown MoveIt
     try:
         moveit_commander.roscpp_shutdown()
     except:
@@ -100,88 +90,79 @@ def cleanup_resources(robot_controller=None, gripper_controller=None, socket_man
 
 
 def main():
-    # QApplication 생성
+    # Create QApplication
     app = QApplication(sys.argv)
     
-    # SIGINT 핸들러 (Ctrl+C 종료 가능)
+    # Set SIGINT handler (allow Ctrl+C to terminate)
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     
-    # ROS 노드 초기화
+    # Initialize ROS node
     init_ros_node()
     
-    # MoveIt 초기화
+    # Initialize MoveIt
     if not init_moveit():
-        rospy.logerr("MoveIt 초기화 실패, 프로그램을 종료합니다.")
+        rospy.logerr("MoveIt initialization failed, exiting.")
         sys.exit(1)
     
-    # 명령줄 인수 처리
-    robot_ip = "192.168.56.101"  # 기본 IP (가상 모드)
+    # Process command line arguments
+    robot_ip = "192.168.56.101"  # Default IP (virtual mode)
     if len(sys.argv) > 1:
         robot_ip = sys.argv[1]
     
-    # 그리퍼 서비스 확인
+    # Check gripper service
     if not check_gripper_service():
-        # GUI 경고 창 표시
+        # Show warning dialog
         msg_box = QMessageBox()
         msg_box.setIcon(QMessageBox.Warning)
-        msg_box.setText("그리퍼 서비스를: /hande_gripper/control'를 찾을 수 없습니다.")
-        msg_box.setInformativeText("hande_driver.py가 실행 중인지 확인하세요. 계속 진행할까요?")
+        msg_box.setText("Gripper service: '/hande_gripper/control' not found.")
+        msg_box.setInformativeText("Check if hande_driver.py is running. Continue anyway?")
         msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         msg_box.setDefaultButton(QMessageBox.Yes)
         
-        # 사용자 선택에 따라 계속 또는 종료
+        # Continue or exit based on user choice
         if msg_box.exec() == QMessageBox.No:
             sys.exit(0)
     
-    # 카메라 토픽 확인
+    # Check camera topics
     if not check_camera_topics():
-        # GUI 경고 창 표시
+        # Show warning dialog
         msg_box = QMessageBox()
         msg_box.setIcon(QMessageBox.Warning)
-        msg_box.setText("카메라 관련 토픽을 찾을 수 없습니다.")
-        msg_box.setInformativeText("Realsense 카메라 노드가 실행 중인지 확인하세요.\n카메라 기능을 사용하지 않고 계속할까요?")
+        msg_box.setText("Camera topics not found.")
+        msg_box.setInformativeText("Check if the Realsense camera node is running.\nContinue without camera functionality?")
         msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         msg_box.setDefaultButton(QMessageBox.Yes)
         
-        # 사용자 선택에 따라 계속 또는 종료
+        # Continue or exit based on user choice
         if msg_box.exec() == QMessageBox.No:
             sys.exit(0)
     
     try:
-        # 로봇 컨트롤러 초기화
+        # Initialize robot controller
         robot_controller = URRobotController()
         robot_controller.add_box('workspace_box', [0, 0, 0], [0.795, 0.6, 1.0], center=True)
         robot_controller.add_box('workspace_box2', [0.6, 0.066, 0.151], [0.50, 0.50, 1.151], center=True)
 
-        # 그리퍼 컨트롤러 초기화
+        # Initialize gripper controller
         gripper_controller = GripperController(robot_ip)
         
-        # 소켓 매니저 초기화
-        socket_manager = SocketManager(robot_controller, gripper_controller)
-        
-        # GUI 생성 (소켓 매니저 전달)
-        gui = URControlGUI(robot_controller, gripper_controller, socket_manager)
-        
-        # 소켓 탭 생성 및 추가
-        socket_tab = SocketTab(socket_manager)
-        gui.tabs.addTab(socket_tab, "소켓 통신")
-        
-        # GUI 표시
+        # Create and show GUI
+        gui = URControlGUI(robot_controller, gripper_controller)
         gui.show()
 
-        # 종료 시 정리 함수 등록
-        app.aboutToQuit.connect(lambda: cleanup_resources(robot_controller, gripper_controller, socket_manager))
+        # Register cleanup function
+        app.aboutToQuit.connect(lambda: cleanup_resources(robot_controller, gripper_controller))
 
-        # QApplication 이벤트 루프 실행
+        # Run QApplication event loop
         sys.exit(app.exec_())
     
     except Exception as e:
-        rospy.logerr(f"초기화 오류: {e}")
+        rospy.logerr(f"Initialization error: {e}")
         cleanup_resources()
         sys.exit(1)
     
     finally:
-        # 종료 전 리소스 정리
+        # Ensure resources are cleaned up
         if not rospy.is_shutdown():
             rospy.signal_shutdown("Application closed")
         try:

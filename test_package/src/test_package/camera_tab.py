@@ -424,7 +424,7 @@ class CameraTab(QWidget):
             # TF 변환 획득
             tf_stamped = self.tf_buffer.lookup_transform(
                 "base_link", self.point_cloud.header.frame_id,
-                rospy.Time(0), rospy.Duration(1.0)
+                self.point_cloud.header.stamp, rospy.Duration(1.0)
             )
 
             trans = tf_stamped.transform.translation
@@ -562,34 +562,39 @@ class CameraTab(QWidget):
             self.image_type_label.setText("깊이 이미지")
             self.display_button.setText("컬러 이미지 보기")
     
+
     def pixel_to_world(self, x, y, depth):
-        """픽셀 좌표와 깊이를 월드 좌표로 변환"""
         if self.camera_info is None or depth <= 0:
             return None
         try:
+            # intrinsic matrix
             k_matrix = np.array(self.camera_info.K).reshape(3, 3)
             fx = k_matrix[0, 0]
             fy = k_matrix[1, 1]
             cx = k_matrix[0, 2]
             cy = k_matrix[1, 2]
-            z = depth
-            x_cam = (x - cx) * z / fx
-            y_cam = (y - cy) * z / fy
+
+            # pixel → camera coords
+            x_cam = (x - cx) * depth / fx
+            y_cam = (y - cy) * depth / fy
+            z_cam = depth
+
+            # 카메라 기준 좌표 (회전 없이 순수한 좌표)
             camera_point = PointStamped()
-            camera_point.header.frame_id = self.camera_info.header.frame_id
+            camera_point.header.frame_id = self.camera_info.header.frame_id  # 보통 camera_link 또는 optical frame
             camera_point.header.stamp = rospy.Time.now()
-            camera_point.point.x = z
-            camera_point.point.y = -x_cam
-            camera_point.point.z = -y_cam
-            try:
-                world_point = self.tf_buffer.transform(camera_point, "base_link", rospy.Duration(0.1))
-                return world_point.point
-            except (tf2_ros.LookupException, tf2_ros.ConnectivityException, 
-                    tf2_ros.ExtrapolationException):
-                return camera_point.point
+            camera_point.point.x = x_cam
+            camera_point.point.y = y_cam
+            camera_point.point.z = z_cam
+
+            # base_link 기준으로 transform
+            world_point = self.tf_buffer.transform(camera_point, "base_link", rospy.Duration(0.2))
+            return world_point.point
+
         except Exception as e:
-            rospy.logerr(f"좌표 변환 오류: {e}")
+            rospy.logerr(f"[pixel_to_world] 변환 실패: {e}")
             return None
+
     
     def update_depth_value(self):
         """마우스 위치의 깊이 값 및 월드 좌표 업데이트"""

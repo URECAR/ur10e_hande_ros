@@ -6,12 +6,14 @@ import cv2
 import numpy as np
 from sensor_msgs.msg import Image, CameraInfo, PointCloud2, PointField
 from geometry_msgs.msg import PointStamped
+from visualization_msgs.msg import Marker
+from std_msgs.msg import ColorRGBA
 from cv_bridge import CvBridge, CvBridgeError
 import tf2_ros
 import tf2_geometry_msgs
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                            QGroupBox, QGridLayout, QPushButton, QFrame, QLineEdit,
-                           QCheckBox, QDoubleSpinBox)
+                           QCheckBox, QDoubleSpinBox, QColorDialog)
 from PyQt5.QtGui import QImage, QPixmap, QColor
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QPoint, QSize, QRect
 import sensor_msgs.point_cloud2 as pc2
@@ -93,15 +95,22 @@ class CameraTab(QWidget):
         
         # 공간 필터 파라미터
         self.filter_enabled = False
-        self.x_min = -0.3
-        self.x_max = 0.22
-        self.y_min = -0.17
-        self.y_max = 0.31
-        self.z_min = 0.46
-        self.z_max = 0.69
+        self.x_min = 0.41
+        self.x_max = 0.87
+        self.y_min = -0.01
+        self.y_max = 0.37
+        self.z_min = 0.18
+        self.z_max = 0.30
+        
+        # 필터 시각화 파라미터
+        self.visualize_filter = True
+        self.marker_color = [0.2, 0.6, 1.0, 0.3]  # RGBA (반투명 파란색)
         
         # 필터링된 포인트클라우드를 위한 퍼블리셔
         self.filtered_cloud_pub = rospy.Publisher('/filtered_pointcloud', PointCloud2, queue_size=1)
+        
+        # 필터 영역 시각화를 위한 마커 퍼블리셔
+        self.marker_pub = rospy.Publisher('/filter_box_marker', Marker, queue_size=1)
         
         # 포인트클라우드 저장 변수
         self.point_cloud = None
@@ -110,8 +119,18 @@ class CameraTab(QWidget):
         self.setup_subscribers()
         self.update_timer = QTimer(self)
         self.update_timer.timeout.connect(self.update_displays)
-        self.update_timer.start(100)
-        rospy.loginfo("카메라 탭 초기화 완료 - 필터링 기능 추가")
+        self.update_timer.start(100)  # 10Hz로 디스플레이 업데이트
+        
+        self.filter_timer = QTimer()
+        self.filter_timer.timeout.connect(self.maybe_apply_filter)
+        self.filter_timer.start(300)  # 300ms마다 검사
+
+        # 필터 박스 시각화 타이머 (느리게 업데이트)
+        self.marker_timer = QTimer(self)
+        self.marker_timer.timeout.connect(self.publish_filter_box_marker)
+        self.marker_timer.start(500)  # 2Hz로 마커 업데이트
+        
+        rospy.loginfo("카메라 탭 초기화 완료 - 필터링 시각화 기능 추가")
     
     def init_ui(self):
         """UI 초기화"""
@@ -164,76 +183,88 @@ class CameraTab(QWidget):
         # 공간 확보를 위한 스페이서
         control_layout.addStretch(1)
         
-
-        
         main_layout.addWidget(control_frame)
         
         # 공간 필터 설정 그룹
         filter_group = QGroupBox("공간 필터 설정")
         filter_layout = QGridLayout()
         
-        # 필터 활성화 체크박스
+        # 필터 활성화 체크박스 및 시각화 체크박스
+        checkbox_layout = QHBoxLayout()
         self.filter_checkbox = QCheckBox("필터 활성화")
         self.filter_checkbox.toggled.connect(self.toggle_filter)
-        filter_layout.addWidget(self.filter_checkbox, 0, 0)
+        checkbox_layout.addWidget(self.filter_checkbox)
+        
+        self.visualize_checkbox = QCheckBox("필터 영역 시각화")
+        self.visualize_checkbox.setChecked(self.visualize_filter)
+        self.visualize_checkbox.toggled.connect(self.toggle_visualization)
+        checkbox_layout.addWidget(self.visualize_checkbox)
+        
+        # 색상 버튼 추가
+        self.color_button = QPushButton("색상 변경")
+        self.color_button.clicked.connect(self.change_marker_color)
+        self.color_button.setStyleSheet(f"background-color: rgba({int(self.marker_color[0]*255)}, {int(self.marker_color[1]*255)}, {int(self.marker_color[2]*255)}, {int(self.marker_color[3]*255)})")
+        checkbox_layout.addWidget(self.color_button)
+        
+        filter_layout.addLayout(checkbox_layout, 0, 0, 1, 4)
         
         # 필터 정보 표시
         self.filter_info_label = QLabel("필터: 비활성화")
-        filter_layout.addWidget(self.filter_info_label, 0, 1, 1, 3)
+        filter_layout.addWidget(self.filter_info_label, 1, 0, 1, 4)
         
         # X 범위 (첫 번째 줄)
-        filter_layout.addWidget(QLabel("X 범위 (m):"), 1, 0)
+        filter_layout.addWidget(QLabel("X 범위 (m):"), 2, 0)
         self.x_min_input = QDoubleSpinBox()
         self.x_min_input.setRange(-10.0, 10.0)
         self.x_min_input.setValue(self.x_min)
         self.x_min_input.setSingleStep(0.01)
         self.x_min_input.valueChanged.connect(self.update_filter_params)
-        filter_layout.addWidget(self.x_min_input, 1, 1)
+        filter_layout.addWidget(self.x_min_input, 2, 1)
         
-        filter_layout.addWidget(QLabel("~"), 1, 2)
+        filter_layout.addWidget(QLabel("~"), 2, 2)
         
         self.x_max_input = QDoubleSpinBox()
         self.x_max_input.setRange(-10.0, 10.0)
         self.x_max_input.setValue(self.x_max)
         self.x_max_input.setSingleStep(0.01)
         self.x_max_input.valueChanged.connect(self.update_filter_params)
-        filter_layout.addWidget(self.x_max_input, 1, 3)
+        filter_layout.addWidget(self.x_max_input, 2, 3)
         
         # Y 범위 (두 번째 줄)
-        filter_layout.addWidget(QLabel("Y 범위 (m):"), 2, 0)
+        filter_layout.addWidget(QLabel("Y 범위 (m):"), 3, 0)
         self.y_min_input = QDoubleSpinBox()
         self.y_min_input.setRange(-10.0, 10.0)
         self.y_min_input.setValue(self.y_min)
         self.y_min_input.setSingleStep(0.01)
         self.y_min_input.valueChanged.connect(self.update_filter_params)
-        filter_layout.addWidget(self.y_min_input, 2, 1)
+        filter_layout.addWidget(self.y_min_input, 3, 1)
         
-        filter_layout.addWidget(QLabel("~"), 2, 2)
+        filter_layout.addWidget(QLabel("~"), 3, 2)
         
         self.y_max_input = QDoubleSpinBox()
         self.y_max_input.setRange(-10.0, 10.0)
         self.y_max_input.setValue(self.y_max)
         self.y_max_input.setSingleStep(0.01)
         self.y_max_input.valueChanged.connect(self.update_filter_params)
-        filter_layout.addWidget(self.y_max_input, 2, 3)
+        filter_layout.addWidget(self.y_max_input, 3, 3)
         
         # Z 범위 (세 번째 줄)
-        filter_layout.addWidget(QLabel("Z 범위 (m):"), 3, 0)
+        filter_layout.addWidget(QLabel("Z 범위 (m):"), 4, 0)
         self.z_min_input = QDoubleSpinBox()
         self.z_min_input.setRange(-10.0, 10.0)
         self.z_min_input.setValue(self.z_min)
         self.z_min_input.setSingleStep(0.01)
         self.z_min_input.valueChanged.connect(self.update_filter_params)
-        filter_layout.addWidget(self.z_min_input, 3, 1)
+        filter_layout.addWidget(self.z_min_input, 4, 1)
         
-        filter_layout.addWidget(QLabel("~"), 3, 2)
+        filter_layout.addWidget(QLabel("~"), 4, 2)
         
         self.z_max_input = QDoubleSpinBox()
         self.z_max_input.setRange(-10.0, 10.0)
         self.z_max_input.setValue(self.z_max)
         self.z_max_input.setSingleStep(0.01)
         self.z_max_input.valueChanged.connect(self.update_filter_params)
-        filter_layout.addWidget(self.z_max_input, 3, 3)
+        filter_layout.addWidget(self.z_max_input, 4, 3)
         
         filter_group.setLayout(filter_layout)
         main_layout.addWidget(filter_group)
@@ -243,6 +274,7 @@ class CameraTab(QWidget):
         filter_ratio = 3
         main_layout.setStretch(0, image_ratio)  # 이미지 그룹 (인덱스 0)
         main_layout.setStretch(2, filter_ratio)  # 필터 그룹 (인덱스 2)
+    
     def setup_subscribers(self):
         """ROS 토픽 구독 설정"""
         rospy.loginfo("구독할 카메라 토픽:")
@@ -287,10 +319,10 @@ class CameraTab(QWidget):
         self.camera_info = msg
     
     def pointcloud_callback(self, msg):
-        """포인트클라우드 콜백"""
+        """포인트클라우드 콜백 - 필터링은 타이머 기반으로 분리"""
         self.point_cloud = msg
-        if self.filter_enabled:
-            self.apply_filter()
+        self.filter_pending = True  # 새로운 데이터 수신 플래그
+
     
     def toggle_filter(self, enabled):
         """필터 활성화/비활성화 토글"""
@@ -300,8 +332,51 @@ class CameraTab(QWidget):
             self.filter_info_label.setText(f"필터: 활성화")
             # 필터 활성화 시 바로 적용
             self.apply_filter()
+            # 필터링 박스 마커 즉시 발행
+            if self.visualize_filter:
+                self.publish_filter_box_marker()
         else:
             self.filter_info_label.setText("필터: 비활성화")
+            # 필터 비활성화 시 마커 제거
+            if self.visualize_filter:
+                self.publish_filter_box_marker(delete=True)
+    
+    def toggle_visualization(self, enabled):
+        """필터 시각화 활성화/비활성화 토글"""
+        self.visualize_filter = enabled
+        
+        if enabled and self.filter_enabled:
+            # 시각화 활성화 & 필터 활성화된 경우 마커 발행
+            self.publish_filter_box_marker()
+        elif not enabled:
+            # 시각화 비활성화 시 마커 제거
+            self.publish_filter_box_marker(delete=True)
+    
+    def change_marker_color(self):
+        """마커 색상 변경"""
+        current_color = QColor(
+            int(self.marker_color[0] * 255),
+            int(self.marker_color[1] * 255),
+            int(self.marker_color[2] * 255),
+            int(self.marker_color[3] * 255)
+        )
+        
+        color = QColorDialog.getColor(current_color, self, "필터 박스 색상 선택", QColorDialog.ShowAlphaChannel)
+        
+        if color.isValid():
+            self.marker_color = [
+                color.red() / 255.0,
+                color.green() / 255.0,
+                color.blue() / 255.0,
+                color.alpha() / 255.0
+            ]
+            
+            # 색상 버튼 배경색 업데이트
+            self.color_button.setStyleSheet(f"background-color: rgba({color.red()}, {color.green()}, {color.blue()}, {color.alpha()})")
+            
+            # 마커 색상 업데이트
+            if self.visualize_filter and self.filter_enabled:
+                self.publish_filter_box_marker()
     
     def get_filter_range_text(self):
         """현재 필터 범위 텍스트 생성"""
@@ -320,66 +395,152 @@ class CameraTab(QWidget):
             self.filter_info_label.setText(f"필터: 활성화")
             
             # 파라미터 변경 후 일정 시간 후에만 필터 적용
-            if hasattr(self, 'filter_timer'):
-                self.filter_timer.stop()
-            self.filter_timer = QTimer()
-            self.filter_timer.setSingleShot(True)
-            self.filter_timer.timeout.connect(self.apply_filter)
-            self.filter_timer.start(500)  # 500ms 후에 필터 적용
+            self.update_after_filter_change()
+
     
-    def apply_filter(self):
-        """필터 적용 (공간 필터링)"""
-        if not self.filter_enabled or self.point_cloud is None:
-            return
+    def update_after_filter_change(self):
+        """필터 파라미터 변경 후 업데이트 작업"""
+        # 필터 적용
+        # self.apply_filter()
         
+        # 필터 시각화 업데이트
+        if self.visualize_filter:
+            self.publish_filter_box_marker()
+    
+    def maybe_apply_filter(self):
+        if self.filter_enabled:
+            self.apply_filter()
+
+
+
+    def apply_filter(self):
+        """PointCloud2를 NumPy 기반으로 필터링하고 재발행"""
+        if not self.point_cloud or not self.filter_enabled:
+            return
+
         try:
-            # PointCloud2를 numpy 배열로 변환
-            points = []
-            for p in pc2.read_points(self.point_cloud, field_names=("x", "y", "z", "rgb"), skip_nans=True):
-                x, y, z, rgb = p
-                if (self.x_min <= x <= self.x_max and
-                    self.y_min <= y <= self.y_max and
-                    self.z_min <= z <= self.z_max):
-                    points.append((x, y, z, rgb))
-            
-            if len(points) == 0:
-                rospy.logwarn("필터링된 포인트가 없습니다!")
+            import tf.transformations
+
+            # TF 변환 획득
+            tf_stamped = self.tf_buffer.lookup_transform(
+                "base_link", self.point_cloud.header.frame_id,
+                rospy.Time(0), rospy.Duration(1.0)
+            )
+
+            trans = tf_stamped.transform.translation
+            rot = tf_stamped.transform.rotation
+            quaternion = [rot.x, rot.y, rot.z, rot.w]
+            T = tf.transformations.quaternion_matrix(quaternion)
+            T[0:3, 3] = [trans.x, trans.y, trans.z]
+
+            # PointCloud2 → NumPy array 변환
+            cloud = np.array(list(pc2.read_points(self.point_cloud,
+                                                  field_names=("x", "y", "z", "rgb"),
+                                                  skip_nans=True)),
+                             dtype=[('x', np.float32), ('y', np.float32),
+                                    ('z', np.float32), ('rgb', np.float32)])
+            if len(cloud) == 0:
                 self.filter_info_label.setText("필터: 활성화 (포인트 없음)")
                 return
-            
-            # 필터링된 포인트 수 업데이트
-            self.filter_info_label.setText(f"필터: 활성화 ({len(points)} 포인트)")
-            
-            # 필터링된 포인트클라우드를 발행 (RViz에서 표시 가능)
-            self.publish_filtered_cloud(points)
-            
+
+            # Nx4 좌표 → 월드 좌표 변환
+            xyz = np.vstack((cloud['x'], cloud['y'], cloud['z'], np.ones(len(cloud)))).T
+            world_xyz = (T @ xyz.T).T[:, :3]
+
+            # 필터링 조건 (월드 좌표 기준)
+            x_cond = (self.x_min <= world_xyz[:, 0]) & (world_xyz[:, 0] <= self.x_max)
+            y_cond = (self.y_min <= world_xyz[:, 1]) & (world_xyz[:, 1] <= self.y_max)
+            z_cond = (self.z_min <= world_xyz[:, 2]) & (world_xyz[:, 2] <= self.z_max)
+            mask = x_cond & y_cond & z_cond
+
+            filtered_points = np.empty(np.sum(mask), dtype=cloud.dtype)
+            filtered_points['x'] = world_xyz[mask, 0]
+            filtered_points['y'] = world_xyz[mask, 1]
+            filtered_points['z'] = world_xyz[mask, 2]
+            filtered_points['rgb'] = cloud['rgb'][mask]
+
+            self.filter_info_label.setText(f"필터: 활성화 ({len(filtered_points)} 포인트)")
+
+            if len(filtered_points) > 0:
+                self.publish_filtered_cloud(filtered_points)
+            else:
+                rospy.logwarn("필터링된 포인트 없음")
+
         except Exception as e:
-            rospy.logerr(f"필터 적용 중 오류: {e}")
-    
-    def publish_filtered_cloud(self, points):
-        """필터링된 포인트클라우드를 RViz에 발행"""
-        if not points:
+            rospy.logerr(f"[apply_filter] 오류: {e}")
+            import traceback
+            rospy.logerr(traceback.format_exc())
+
+    def publish_filtered_cloud(self, filtered_points):
+        """NumPy 기반 포인트클라우드 발행"""
+        from std_msgs.msg import Header
+
+        header = Header()
+        header.stamp = rospy.Time.now()
+        header.frame_id = "base_link"
+        fields = [
+            PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+            PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+            PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
+            PointField(name='rgb', offset=12, datatype=PointField.FLOAT32, count=1),
+        ]
+
+        self.filtered_cloud_pub.publish(pc2.create_cloud(header, fields, filtered_points))
+
+    def publish_filter_box_marker(self, delete=False):
+        """필터 영역을 표시하는 마커 발행 (월드 좌표계 기준)"""
+        if not self.visualize_filter and not delete:
             return
         
-        try:
-            # PointCloud2 메시지 생성
-            header = self.point_cloud.header
-            header.stamp = rospy.Time.now()
+        marker = Marker()
+        # 월드 좌표계로 명시적 설정
+        marker.header.frame_id = "base_link"  # 월드 좌표계
+        marker.header.stamp = rospy.Time.now()
+        marker.ns = "filter_box"
+        marker.id = 0
+        
+        if delete or not self.filter_enabled:
+            marker.action = Marker.DELETE
+        else:
+            marker.action = Marker.ADD
+            marker.type = Marker.CUBE
             
-            # 필드 정의
-            fields = [
-                PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
-                PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
-                PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
-                PointField(name='rgb', offset=12, datatype=PointField.FLOAT32, count=1),
-            ]
+            # 필터 영역의 중심 계산 (월드 좌표계 기준)
+            center_x = (self.x_min + self.x_max) / 2
+            center_y = (self.y_min + self.y_max) / 2
+            center_z = (self.z_min + self.z_max) / 2
             
-            # PointCloud2 메시지 생성 및 발행
-            filtered_cloud = pc2.create_cloud(header, fields, points)
-            self.filtered_cloud_pub.publish(filtered_cloud)
+            # 마커 위치 설정 (월드 좌표계)
+            marker.pose.position.x = center_x
+            marker.pose.position.y = center_y
+            marker.pose.position.z = center_z
             
-        except Exception as e:
-            rospy.logerr(f"포인트클라우드 발행 중 오류: {e}")
+            # 마커 방향 (회전 없음 - 항등 쿼터니언)
+            marker.pose.orientation.x = 0.0
+            marker.pose.orientation.y = 0.0
+            marker.pose.orientation.z = 0.0
+            marker.pose.orientation.w = 1.0
+            
+            # 마커 크기 (필터 영역의 크기)
+            marker.scale.x = max(0.001, abs(self.x_max - self.x_min))
+            marker.scale.y = max(0.001, abs(self.y_max - self.y_min))
+            marker.scale.z = max(0.001, abs(self.z_max - self.z_min))
+            
+            # 마커 색상 (RGBA, 반투명)
+            marker.color.r = self.marker_color[0]
+            marker.color.g = self.marker_color[1]
+            marker.color.b = self.marker_color[2]
+            marker.color.a = self.marker_color[3]  # 알파값 (투명도)
+            
+            # 마커가 계속 표시되도록 설정
+            marker.lifetime = rospy.Duration(0)
+            
+            # 디버깅을 위한 로그 출력
+            # rospy.loginfo_throttle(5.0, f"필터 박스 마커 발행: 중심({center_x:.3f}, {center_y:.3f}, {center_z:.3f}), " + 
+            #               f"크기({marker.scale.x:.3f} x {marker.scale.y:.3f} x {marker.scale.z:.3f})")
+        
+        # 마커 발행
+        self.marker_pub.publish(marker)
     
     def on_mouse_moved(self, pos):
         """마우스 이동 이벤트 처리 - 스로틀링 적용"""
@@ -502,8 +663,8 @@ class CameraTab(QWidget):
                 mask = (depth_norm > 0.1) & (depth_norm < 5.0)
                 depth_norm_masked = np.zeros_like(depth_norm)
                 depth_norm_masked[mask] = depth_norm[mask]
-                min_depth = 0.1
-                max_depth = 5.0
+                min_depth = 0.5
+                max_depth = 1.7
                 normalized = np.zeros_like(depth_norm_masked)
                 normalized[mask] = ((depth_norm_masked[mask] - min_depth) / (max_depth - min_depth) * 255)
                 depth_visualized = normalized.astype(np.uint8)
@@ -528,3 +689,8 @@ class CameraTab(QWidget):
             self.cloud_sub.unregister()
         if self.update_timer.isActive():
             self.update_timer.stop()
+        if self.marker_timer.isActive():
+            self.marker_timer.stop()
+        
+        # 마지막으로 마커 제거 (삭제)
+        self.publish_filter_box_marker(delete=True)

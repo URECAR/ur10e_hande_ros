@@ -391,6 +391,15 @@ Visualization Manager:
         filter_box: true
       Queue Size: 100
       Value: true
+    - Class: rviz/InteractiveMarkers
+      Enable Transparency: true
+      Enabled: false
+      Name: InteractiveMarkers
+      Show Axes: false
+      Show Descriptions: true
+      Show Visual Aids: false
+      Update Topic: /camera_control/update
+      Value: false
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -407,7 +416,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 1.6683628559112549
+      Distance: 1.3341232538223267
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -415,17 +424,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.75
       Focal Point:
-        X: 0.6604232788085938
-        Y: 0.15364034473896027
-        Z: -0.01952928490936756
+        X: 0.6265066862106323
+        Y: 0.26686546206474304
+        Z: 0.17703433334827423
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.6697958707809448
+      Pitch: 0.6747965216636658
       Target Frame: base_link
-      Yaw: 6.280389308929443
+      Yaw: 1.0972040891647339
     Saved: ~
 Window Geometry:
   Displays:
@@ -443,5 +452,5 @@ Window Geometry:
   Views:
     collapsed: false
   Width: 1850
-  X: 1030
-  Y: 131
+  X: 1366
+  Y: 70

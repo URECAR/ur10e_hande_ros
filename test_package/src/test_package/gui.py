@@ -69,12 +69,13 @@ class URControlGUI(QMainWindow):
         
         # 포즈 목록 로딩 연결 (포즈 관리자 초기화 후 목록 로딩)
         self.pose_manager.pose_list_updated.connect(self.update_pose_list)
-        
+
         # 수동으로 포즈 목록 업데이트 호출
         QTimer.singleShot(1000, lambda: self.update_pose_list(self.pose_manager.get_pose_names()))
         
         # 계획 및 실행 완료 후 자동 업데이트를 위한 플래그
         self.auto_update_after_movement = True
+        self.has_current_plan = False  # 현재 plan의 존재 여부를 추적하는 플래그
     
     def initial_update(self):
         """GUI 초기화 후 조인트 및 TCP 값을 입력 필드에 설정"""
@@ -632,33 +633,59 @@ class URControlGUI(QMainWindow):
         """계획 결과 업데이트"""
         self.log_label.setText(message)
         
-        # 계획 성공 시에만 실행 버튼 활성화 (실행 중이 아닐 때만)
-        if not self.executing:
-            self.execute_joint_button.setEnabled(success)
-            self.execute_tcp_button.setEnabled(success)
-            self.execute_pose_button.setEnabled(success)
+        # 계획 성공 여부 추적을 위한 플래그 업데이트
+        if "계획" in message:
+            self.has_current_plan = success
         
+        # 계획 성공 여부에 따라 실행 버튼 활성화 상태 설정
+        # 실행 중이 아닐 때만 버튼 상태 변경
+        if not self.executing:
+            # 성공한 계획이 있거나, "실행" 관련 메시지가 성공적이면 활성화
+            should_enable = self.has_current_plan
+            self.execute_joint_button.setEnabled(should_enable)
+            self.execute_tcp_button.setEnabled(should_enable)
+            self.execute_pose_button.setEnabled(should_enable)
+        
+        # 로그 메시지 스타일 설정
         if success:
             self.log_label.setStyleSheet("color: green")
         else:
             self.log_label.setStyleSheet("color: red")
         
-        # 실행 완료 후에는 계획 버튼 활성화 및 좌표 자동 업데이트
-        if "실행" in message and "성공" in message:
-            self.executing = False
-            self.plan_joint_button.setEnabled(True)
-            self.plan_tcp_button.setEnabled(True)
-            self.plan_pose_button.setEnabled(True)
+        # 실행 완료 메시지 처리
+        if "실행" in message:
+            if success:
+                # 실행 성공
+                self.executing = False
+                # 계획은 이미 실행되었으므로 초기화
+                self.has_current_plan = False
+            else:
+                # 실행 실패 또는 진행 중
+                if "진행 중" in message:
+                    self.executing = True
+                else:
+                    # 실행 실패 시에도 executing 플래그 해제
+                    self.executing = False
             
-            # 포즈 실행 버튼 관련 업데이트
-            if self.selected_pose_name:
-                self.plan_pose_button.setEnabled(True)
-            
-            # 움직임 완료 후 입력 필드 자동 업데이트
-            if self.auto_update_after_movement:
-                QTimer.singleShot(500, self.update_joint_inputs)  # 0.5초 후 조인트 업데이트
-                QTimer.singleShot(500, self.update_tcp_inputs)    # 0.5초 후 TCP 업데이트
-
+            # 실행 완료 또는 실패 시 버튼 상태 업데이트
+            if not self.executing:
+                # 계획 버튼 활성화
+                self.plan_joint_button.setEnabled(True)
+                self.plan_tcp_button.setEnabled(True)
+                
+                # 포즈 관련 버튼 활성화
+                if self.selected_pose_name:
+                    self.plan_pose_button.setEnabled(True)
+                
+                # 실행 버튼은 현재 계획이 있을 때만 활성화
+                self.execute_joint_button.setEnabled(self.has_current_plan)
+                self.execute_tcp_button.setEnabled(self.has_current_plan)
+                self.execute_pose_button.setEnabled(self.has_current_plan)
+                
+                # 움직임 완료 후 입력 필드 자동 업데이트
+                if self.auto_update_after_movement and success:
+                    QTimer.singleShot(500, self.update_joint_inputs)
+                    QTimer.singleShot(500, self.update_tcp_inputs)
     def update_gripper_display(self, status):
         """그리퍼 상태 업데이트 (물체 감지 포함)"""
         # 그리퍼 너비 표시 업데이트 (미터 -> 밀리미터)
@@ -784,9 +811,11 @@ class URControlGUI(QMainWindow):
     
     def execute_plan(self):
         """현재 계획 실행"""
-        # 실행 중이면 무시
-        if self.executing:
-            return
+        # 실행 중이거나 계획이 없으면 실행하지 않음
+        if self.executing or not self.has_current_plan:
+            if not self.has_current_plan:
+                self.planning_result.emit(False, "실행할 계획이 없습니다. 먼저 계획을 생성하세요.")
+            return False
         
         # 로그 메시지 업데이트
         self.log_label.setText("계획 실행 중...")
@@ -798,10 +827,12 @@ class URControlGUI(QMainWindow):
         self.execute_pose_button.setEnabled(False)
         
         # 계획 실행
-        self.robot_controller.execute_plan()
+        success = self.robot_controller.execute_plan()
         
         # 실행 중 플래그 설정
         self.executing = True
+        
+        return success
     
     def update_pose_list(self, pose_names):
         """포즈 목록 업데이트"""

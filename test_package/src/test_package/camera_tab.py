@@ -424,7 +424,7 @@ class CameraTab(QWidget):
             # TF 변환 획득
             tf_stamped = self.tf_buffer.lookup_transform(
                 "base_link", self.point_cloud.header.frame_id,
-                self.point_cloud.header.stamp, rospy.Duration(1.0)
+                rospy.Time(0), rospy.Duration(1.0)
             )
 
             trans = tf_stamped.transform.translation
@@ -582,7 +582,7 @@ class CameraTab(QWidget):
             # 카메라 기준 좌표 (회전 없이 순수한 좌표)
             camera_point = PointStamped()
             camera_point.header.frame_id = self.camera_info.header.frame_id  # 보통 camera_link 또는 optical frame
-            camera_point.header.stamp = rospy.Time.now()
+            camera_point.header.stamp = rospy.Time(0)
             camera_point.point.x = x_cam
             camera_point.point.y = y_cam
             camera_point.point.z = z_cam

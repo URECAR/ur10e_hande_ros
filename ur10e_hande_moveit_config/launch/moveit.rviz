@@ -6,6 +6,7 @@ Panels:
       Expanded:
         - /MotionPlanning1/Planning Request1
         - /MotionPlanning1/Planned Path1
+        - /PointCloud2(Camera)1
         - /DepthCloud1/Auto Size1
       Splitter Ratio: 0.5
     Tree Height: 819
@@ -274,7 +275,7 @@ Visualization Manager:
         Show Robot Visual: true
       Value: true
       Velocity_Scaling_Factor: 0.1
-    - Alpha: 0.0020000000949949026
+    - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
         Max Value: 10
@@ -350,7 +351,7 @@ Visualization Manager:
       Color: 255; 255; 255
       Color Transformer: RGB8
       Decay Time: 0
-      Enabled: true
+      Enabled: false
       Invert Rainbow: false
       Max Color: 255; 255; 255
       Min Color: 0; 0; 0
@@ -365,7 +366,7 @@ Visualization Manager:
       Unreliable: false
       Use Fixed Frame: true
       Use rainbow: true
-      Value: true
+      Value: false
     - Class: rviz/TF
       Enabled: false
       Filter (blacklist): ""
@@ -388,7 +389,7 @@ Visualization Manager:
       Marker Topic: /filter_box_marker
       Name: Marker
       Namespaces:
-        filter_box: true
+        {}
       Queue Size: 100
       Value: true
     - Class: rviz/InteractiveMarkers
@@ -432,9 +433,9 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.6747965216636658
+      Pitch: 0.7097964882850647
       Target Frame: base_link
-      Yaw: 1.0972040891647339
+      Yaw: 1.402203917503357
     Saved: ~
 Window Geometry:
   Displays:
@@ -452,5 +453,5 @@ Window Geometry:
   Views:
     collapsed: false
   Width: 1850
-  X: 1366
-  Y: 70
+  X: 1030
+  Y: 64

@@ -140,8 +140,8 @@ def main():
     try:
         # Initialize robot controller
         robot_controller = URRobotController()
-        robot_controller.add_box('workspace_box', [0, 0, 0], [0.795, 0.6, 1.0], center=True)
-        robot_controller.add_box('workspace_box2', [0.65, 0.066, 0.152], [0.50, 0.50, 1.152], center=True)
+        # robot_controller.add_box('workspace_box', [0, 0, 0], [0.795, 0.6, 1.0], center=True)
+        # robot_controller.add_box('workspace_box2', [0.65, 0.066, 0.152], [0.50, 0.50, 1.152], center=True)
 
         # Initialize gripper controller
         gripper_controller = GripperController(robot_ip)

@@ -6,17 +6,18 @@ import cv2
 import numpy as np
 from sensor_msgs.msg import Image, CameraInfo, PointCloud2, PointField
 from geometry_msgs.msg import PointStamped
-from visualization_msgs.msg import Marker
+from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import ColorRGBA
 from cv_bridge import CvBridge, CvBridgeError
 import tf2_ros
 import tf2_geometry_msgs
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                            QGroupBox, QGridLayout, QPushButton, QFrame, QLineEdit,
-                           QCheckBox, QDoubleSpinBox, QColorDialog)
+                           QCheckBox, QDoubleSpinBox, QColorDialog, QSpinBox)
 from PyQt5.QtGui import QImage, QPixmap, QColor
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QPoint, QSize, QRect
 import sensor_msgs.point_cloud2 as pc2
+from sklearn.cluster import DBSCAN
 
 
 class ImageDisplayWidget(QLabel):
@@ -76,7 +77,7 @@ class ImageDisplayWidget(QLabel):
 
 
 class CameraTab(QWidget):
-    """카메라 탭 위젯 - 개선된 버전"""
+    """카메라 탭 위젯 - 물체 감지 기능 추가"""
     
     def __init__(self):
         super().__init__()
@@ -93,27 +94,33 @@ class CameraTab(QWidget):
         # 이미지 표시 모드 (0: 컬러, 1: 깊이)
         self.display_mode = 0
         
-        # 공간 필터 파라미터
-        self.filter_enabled = False
-        self.x_min = 0.41
-        self.x_max = 0.87
-        self.y_min = -0.01
+        # 영역 파라미터
+        self.region_enabled = False
+        self.x_min = 0.48
+        self.x_max = 0.67
+        self.y_min = -0.15
         self.y_max = 0.37
-        self.z_min = 0.18
-        self.z_max = 0.30
+        self.z_min = 0.10
+        self.z_max = 0.25
         
-        # 필터 시각화 파라미터
-        self.visualize_filter = True
+        # 물체 감지 파라미터
+        self.height_threshold = 0.01  # 평면 위로 튀어나온 물체로 감지할 높이 임계값(m)
+        self.cluster_distance = 0.02  # 클러스터링할 때 최대 거리(m)
+        self.min_points = 10  # 클러스터로 인정할 최소 포인트 수
+        
+        # 영역 박스 시각화 파라미터
+        self.visualize_region = True
         self.marker_color = [0.2, 0.6, 1.0, 0.3]  # RGBA (반투명 파란색)
         
-        # 필터링된 포인트클라우드를 위한 퍼블리셔
-        self.filtered_cloud_pub = rospy.Publisher('/filtered_pointcloud', PointCloud2, queue_size=1)
+        # 물체 마커를 위한 퍼블리셔
+        self.object_markers_pub = rospy.Publisher('/detected_objects', MarkerArray, queue_size=1)
         
-        # 필터 영역 시각화를 위한 마커 퍼블리셔
-        self.marker_pub = rospy.Publisher('/filter_box_marker', Marker, queue_size=1)
+        # 영역 박스 시각화를 위한 마커 퍼블리셔
+        self.region_marker_pub = rospy.Publisher('/region_box_marker', Marker, queue_size=1)
         
         # 포인트클라우드 저장 변수
         self.point_cloud = None
+        self.detected_objects = []
         
         self.init_ui()
         self.setup_subscribers()
@@ -121,16 +128,16 @@ class CameraTab(QWidget):
         self.update_timer.timeout.connect(self.update_displays)
         self.update_timer.start(100)  # 10Hz로 디스플레이 업데이트
         
-        self.filter_timer = QTimer()
-        self.filter_timer.timeout.connect(self.maybe_apply_filter)
-        self.filter_timer.start(300)  # 300ms마다 검사
+        self.detection_timer = QTimer()
+        self.detection_timer.timeout.connect(self.maybe_detect_objects)
+        self.detection_timer.start(500)  # 500ms마다 물체 감지
 
-        # 필터 박스 시각화 타이머 (느리게 업데이트)
+        # 영역 박스 시각화 타이머 (느리게 업데이트)
         self.marker_timer = QTimer(self)
-        self.marker_timer.timeout.connect(self.publish_filter_box_marker)
+        self.marker_timer.timeout.connect(self.publish_region_box_marker)
         self.marker_timer.start(500)  # 2Hz로 마커 업데이트
         
-        rospy.loginfo("카메라 탭 초기화 완료 - 필터링 시각화 기능 추가")
+        rospy.loginfo("카메라 탭 초기화 완료 - 물체 감지 기능 추가")
     
     def init_ui(self):
         """UI 초기화"""
@@ -180,23 +187,28 @@ class CameraTab(QWidget):
         self.depth_label = QLabel("깊이: - mm")
         control_layout.addWidget(self.depth_label)
         
+        # 감지된 물체 수 표시
+        self.objects_count_label = QLabel("감지된 물체: 0개")
+        self.objects_count_label.setStyleSheet("font-weight: bold; color: green;")
+        control_layout.addWidget(self.objects_count_label)
+        
         # 공간 확보를 위한 스페이서
         control_layout.addStretch(1)
         
         main_layout.addWidget(control_frame)
         
-        # 공간 필터 설정 그룹
-        filter_group = QGroupBox("공간 필터 설정")
-        filter_layout = QGridLayout()
+        # 물체 감지 영역 설정 그룹
+        region_group = QGroupBox("물체 감지 영역 설정")
+        region_layout = QGridLayout()
         
-        # 필터 활성화 체크박스 및 시각화 체크박스
+        # 영역 활성화 체크박스 및 시각화 체크박스
         checkbox_layout = QHBoxLayout()
-        self.filter_checkbox = QCheckBox("필터 활성화")
-        self.filter_checkbox.toggled.connect(self.toggle_filter)
-        checkbox_layout.addWidget(self.filter_checkbox)
+        self.region_checkbox = QCheckBox("영역 활성화")
+        self.region_checkbox.toggled.connect(self.toggle_region)
+        checkbox_layout.addWidget(self.region_checkbox)
         
-        self.visualize_checkbox = QCheckBox("필터 영역 시각화")
-        self.visualize_checkbox.setChecked(self.visualize_filter)
+        self.visualize_checkbox = QCheckBox("영역 시각화")
+        self.visualize_checkbox.setChecked(self.visualize_region)
         self.visualize_checkbox.toggled.connect(self.toggle_visualization)
         checkbox_layout.addWidget(self.visualize_checkbox)
         
@@ -206,74 +218,110 @@ class CameraTab(QWidget):
         self.color_button.setStyleSheet(f"background-color: rgba({int(self.marker_color[0]*255)}, {int(self.marker_color[1]*255)}, {int(self.marker_color[2]*255)}, {int(self.marker_color[3]*255)})")
         checkbox_layout.addWidget(self.color_button)
         
-        filter_layout.addLayout(checkbox_layout, 0, 0, 1, 4)
+        region_layout.addLayout(checkbox_layout, 0, 0, 1, 4)
         
-        # 필터 정보 표시
-        self.filter_info_label = QLabel("필터: 비활성화")
-        filter_layout.addWidget(self.filter_info_label, 1, 0, 1, 4)
+        # 영역 정보 표시
+        self.region_info_label = QLabel("영역: 비활성화")
+        region_layout.addWidget(self.region_info_label, 1, 0, 1, 4)
         
         # X 범위 (첫 번째 줄)
-        filter_layout.addWidget(QLabel("X 범위 (m):"), 2, 0)
+        region_layout.addWidget(QLabel("X 범위 (m):"), 2, 0)
         self.x_min_input = QDoubleSpinBox()
         self.x_min_input.setRange(-10.0, 10.0)
         self.x_min_input.setValue(self.x_min)
         self.x_min_input.setSingleStep(0.01)
-        self.x_min_input.valueChanged.connect(self.update_filter_params)
-        filter_layout.addWidget(self.x_min_input, 2, 1)
+        self.x_min_input.valueChanged.connect(self.update_region_params)
+        region_layout.addWidget(self.x_min_input, 2, 1)
         
-        filter_layout.addWidget(QLabel("~"), 2, 2)
+        region_layout.addWidget(QLabel("~"), 2, 2)
         
         self.x_max_input = QDoubleSpinBox()
         self.x_max_input.setRange(-10.0, 10.0)
         self.x_max_input.setValue(self.x_max)
         self.x_max_input.setSingleStep(0.01)
-        self.x_max_input.valueChanged.connect(self.update_filter_params)
-        filter_layout.addWidget(self.x_max_input, 2, 3)
+        self.x_max_input.valueChanged.connect(self.update_region_params)
+        region_layout.addWidget(self.x_max_input, 2, 3)
         
         # Y 범위 (두 번째 줄)
-        filter_layout.addWidget(QLabel("Y 범위 (m):"), 3, 0)
+        region_layout.addWidget(QLabel("Y 범위 (m):"), 3, 0)
         self.y_min_input = QDoubleSpinBox()
         self.y_min_input.setRange(-10.0, 10.0)
         self.y_min_input.setValue(self.y_min)
         self.y_min_input.setSingleStep(0.01)
-        self.y_min_input.valueChanged.connect(self.update_filter_params)
-        filter_layout.addWidget(self.y_min_input, 3, 1)
+        self.y_min_input.valueChanged.connect(self.update_region_params)
+        region_layout.addWidget(self.y_min_input, 3, 1)
         
-        filter_layout.addWidget(QLabel("~"), 3, 2)
+        region_layout.addWidget(QLabel("~"), 3, 2)
         
         self.y_max_input = QDoubleSpinBox()
         self.y_max_input.setRange(-10.0, 10.0)
         self.y_max_input.setValue(self.y_max)
         self.y_max_input.setSingleStep(0.01)
-        self.y_max_input.valueChanged.connect(self.update_filter_params)
-        filter_layout.addWidget(self.y_max_input, 3, 3)
+        self.y_max_input.valueChanged.connect(self.update_region_params)
+        region_layout.addWidget(self.y_max_input, 3, 3)
         
         # Z 범위 (세 번째 줄)
-        filter_layout.addWidget(QLabel("Z 범위 (m):"), 4, 0)
+        region_layout.addWidget(QLabel("Z 범위 (m):"), 4, 0)
         self.z_min_input = QDoubleSpinBox()
         self.z_min_input.setRange(-10.0, 10.0)
         self.z_min_input.setValue(self.z_min)
         self.z_min_input.setSingleStep(0.01)
-        self.z_min_input.valueChanged.connect(self.update_filter_params)
-        filter_layout.addWidget(self.z_min_input, 4, 1)
+        self.z_min_input.valueChanged.connect(self.update_region_params)
+        region_layout.addWidget(self.z_min_input, 4, 1)
         
-        filter_layout.addWidget(QLabel("~"), 4, 2)
+        region_layout.addWidget(QLabel("~"), 4, 2)
         
         self.z_max_input = QDoubleSpinBox()
         self.z_max_input.setRange(-10.0, 10.0)
         self.z_max_input.setValue(self.z_max)
         self.z_max_input.setSingleStep(0.01)
-        self.z_max_input.valueChanged.connect(self.update_filter_params)
-        filter_layout.addWidget(self.z_max_input, 4, 3)
+        self.z_max_input.valueChanged.connect(self.update_region_params)
+        region_layout.addWidget(self.z_max_input, 4, 3)
         
-        filter_group.setLayout(filter_layout)
-        main_layout.addWidget(filter_group)
+        # 물체 감지 파라미터 설정
+        detection_params_layout = QGridLayout()
         
-        # 전체 크기 설정 - 이미지와 필터 영역의 비율 조정
+        # 높이 임계값
+        detection_params_layout.addWidget(QLabel("높이 임계값 (cm):"), 0, 0)
+        self.height_threshold_input = QDoubleSpinBox()
+        self.height_threshold_input.setRange(0.1, 50.0)
+        self.height_threshold_input.setValue(self.height_threshold * 100)  # m → cm 변환
+        self.height_threshold_input.setSingleStep(0.5)
+        self.height_threshold_input.valueChanged.connect(self.update_detection_params)
+        detection_params_layout.addWidget(self.height_threshold_input, 0, 1)
+        
+        # 클러스터링 거리
+        detection_params_layout.addWidget(QLabel("클러스터 거리 (cm):"), 1, 0)
+        self.cluster_distance_input = QDoubleSpinBox()
+        self.cluster_distance_input.setRange(0.5, 50.0)
+        self.cluster_distance_input.setValue(self.cluster_distance * 100)  # m → cm 변환
+        self.cluster_distance_input.setSingleStep(0.5)
+        self.cluster_distance_input.valueChanged.connect(self.update_detection_params)
+        detection_params_layout.addWidget(self.cluster_distance_input, 1, 1)
+        
+        # 최소 포인트 수
+        detection_params_layout.addWidget(QLabel("최소 포인트 수:"), 2, 0)
+        self.min_points_input = QSpinBox()
+        self.min_points_input.setRange(3, 1000)
+        self.min_points_input.setValue(self.min_points)
+        self.min_points_input.valueChanged.connect(self.update_detection_params)
+        detection_params_layout.addWidget(self.min_points_input, 2, 1)
+        
+        # 물체 감지 파라미터 그룹 추가
+        detection_params_group = QGroupBox("물체 감지 파라미터")
+        detection_params_group.setLayout(detection_params_layout)
+        
+        # 두 그룹을 하나의 레이아웃으로 결합
+        region_layout.addWidget(detection_params_group, 5, 0, 1, 4)
+        
+        region_group.setLayout(region_layout)
+        main_layout.addWidget(region_group)
+        
+        # 전체 크기 설정 - 이미지와 영역의 비율 조정
         image_ratio = 7
-        filter_ratio = 3
+        region_ratio = 3
         main_layout.setStretch(0, image_ratio)  # 이미지 그룹 (인덱스 0)
-        main_layout.setStretch(2, filter_ratio)  # 필터 그룹 (인덱스 2)
+        main_layout.setStretch(2, region_ratio)  # 영역 그룹 (인덱스 2)
     
     def setup_subscribers(self):
         """ROS 토픽 구독 설정"""
@@ -319,38 +367,38 @@ class CameraTab(QWidget):
         self.camera_info = msg
     
     def pointcloud_callback(self, msg):
-        """포인트클라우드 콜백 - 필터링은 타이머 기반으로 분리"""
+        """포인트클라우드 콜백"""
         self.point_cloud = msg
-        self.filter_pending = True  # 새로운 데이터 수신 플래그
-
     
-    def toggle_filter(self, enabled):
-        """필터 활성화/비활성화 토글"""
-        self.filter_enabled = enabled
+    def toggle_region(self, enabled):
+        """영역 활성화/비활성화 토글"""
+        self.region_enabled = enabled
         
         if enabled:
-            self.filter_info_label.setText(f"필터: 활성화")
-            # 필터 활성화 시 바로 적용
-            self.apply_filter()
-            # 필터링 박스 마커 즉시 발행
-            if self.visualize_filter:
-                self.publish_filter_box_marker()
+            region_text = self.get_region_range_text()
+            self.region_info_label.setText(f"영역: 활성화 ({region_text})")
+            # 영역 박스 마커 즉시 발행
+            if self.visualize_region:
+                self.publish_region_box_marker()
         else:
-            self.filter_info_label.setText("필터: 비활성화")
-            # 필터 비활성화 시 마커 제거
-            if self.visualize_filter:
-                self.publish_filter_box_marker(delete=True)
+            self.region_info_label.setText("영역: 비활성화")
+            # 영역 비활성화 시 마커 제거
+            if self.visualize_region:
+                self.publish_region_box_marker(delete=True)
+            # 물체 마커 제거
+            self.publish_object_markers([], delete=True)
+            self.objects_count_label.setText("감지된 물체: 0개")
     
     def toggle_visualization(self, enabled):
-        """필터 시각화 활성화/비활성화 토글"""
-        self.visualize_filter = enabled
+        """영역 시각화 활성화/비활성화 토글"""
+        self.visualize_region = enabled
         
-        if enabled and self.filter_enabled:
-            # 시각화 활성화 & 필터 활성화된 경우 마커 발행
-            self.publish_filter_box_marker()
+        if enabled and self.region_enabled:
+            # 시각화 활성화 & 영역 활성화된 경우 마커 발행
+            self.publish_region_box_marker()
         elif not enabled:
             # 시각화 비활성화 시 마커 제거
-            self.publish_filter_box_marker(delete=True)
+            self.publish_region_box_marker(delete=True)
     
     def change_marker_color(self):
         """마커 색상 변경"""
@@ -361,7 +409,7 @@ class CameraTab(QWidget):
             int(self.marker_color[3] * 255)
         )
         
-        color = QColorDialog.getColor(current_color, self, "필터 박스 색상 선택", QColorDialog.ShowAlphaChannel)
+        color = QColorDialog.getColor(current_color, self, "영역 박스 색상 선택", QColorDialog.ShowAlphaChannel)
         
         if color.isValid():
             self.marker_color = [
@@ -375,15 +423,15 @@ class CameraTab(QWidget):
             self.color_button.setStyleSheet(f"background-color: rgba({color.red()}, {color.green()}, {color.blue()}, {color.alpha()})")
             
             # 마커 색상 업데이트
-            if self.visualize_filter and self.filter_enabled:
-                self.publish_filter_box_marker()
+            if self.visualize_region and self.region_enabled:
+                self.publish_region_box_marker()
     
-    def get_filter_range_text(self):
-        """현재 필터 범위 텍스트 생성"""
+    def get_region_range_text(self):
+        """현재 영역 범위 텍스트 생성"""
         return f"X[{self.x_min:.2f}~{self.x_max:.2f}], Y[{self.y_min:.2f}~{self.y_max:.2f}], Z[{self.z_min:.2f}~{self.z_max:.2f}]"
     
-    def update_filter_params(self):
-        """필터 파라미터 업데이트 - 스로틀링 적용"""
+    def update_region_params(self):
+        """영역 파라미터 업데이트"""
         self.x_min = self.x_min_input.value()
         self.x_max = self.x_max_input.value()
         self.y_min = self.y_min_input.value()
@@ -391,31 +439,33 @@ class CameraTab(QWidget):
         self.z_min = self.z_min_input.value()
         self.z_max = self.z_max_input.value()
         
-        if self.filter_enabled:
-            self.filter_info_label.setText(f"필터: 활성화")
+        if self.region_enabled:
+            region_text = self.get_region_range_text()
+            self.region_info_label.setText(f"영역: 활성화 ({region_text})")
             
-            # 파라미터 변경 후 일정 시간 후에만 필터 적용
-            self.update_after_filter_change()
-
+            # 영역 박스 시각화 업데이트
+            if self.visualize_region:
+                self.publish_region_box_marker()
     
-    def update_after_filter_change(self):
-        """필터 파라미터 변경 후 업데이트 작업"""
-        # 필터 적용
-        # self.apply_filter()
+    def update_detection_params(self):
+        """물체 감지 파라미터 업데이트"""
+        # cm → m 변환
+        self.height_threshold = self.height_threshold_input.value() / 100.0
+        self.cluster_distance = self.cluster_distance_input.value() / 100.0
+        self.min_points = self.min_points_input.value()
         
-        # 필터 시각화 업데이트
-        if self.visualize_filter:
-            self.publish_filter_box_marker()
+        rospy.loginfo(f"물체 감지 파라미터 업데이트: 높이 임계값={self.height_threshold:.3f}m, "
+                     f"클러스터 거리={self.cluster_distance:.3f}m, "
+                     f"최소 포인트={self.min_points}")
     
-    def maybe_apply_filter(self):
-        if self.filter_enabled:
-            self.apply_filter()
-
-
-
-    def apply_filter(self):
-        """PointCloud2를 NumPy 기반으로 필터링하고 재발행"""
-        if not self.point_cloud or not self.filter_enabled:
+    def maybe_detect_objects(self):
+        """영역이 활성화된 경우에만 물체 감지 실행"""
+        if self.region_enabled and self.point_cloud:
+            self.detect_objects()
+    
+    def detect_objects(self):
+        """지정된 영역 내에서 물체 감지"""
+        if not self.point_cloud:
             return
 
         try:
@@ -440,72 +490,162 @@ class CameraTab(QWidget):
                              dtype=[('x', np.float32), ('y', np.float32),
                                     ('z', np.float32), ('rgb', np.float32)])
             if len(cloud) == 0:
-                self.filter_info_label.setText("필터: 활성화 (포인트 없음)")
+                self.region_info_label.setText("영역: 활성화 (포인트 없음)")
                 return
 
             # Nx4 좌표 → 월드 좌표 변환
             xyz = np.vstack((cloud['x'], cloud['y'], cloud['z'], np.ones(len(cloud)))).T
             world_xyz = (T @ xyz.T).T[:, :3]
 
-            # 필터링 조건 (월드 좌표 기준)
+            # 지정 영역 내의 포인트 선택
             x_cond = (self.x_min <= world_xyz[:, 0]) & (world_xyz[:, 0] <= self.x_max)
             y_cond = (self.y_min <= world_xyz[:, 1]) & (world_xyz[:, 1] <= self.y_max)
             z_cond = (self.z_min <= world_xyz[:, 2]) & (world_xyz[:, 2] <= self.z_max)
-            mask = x_cond & y_cond & z_cond
+            region_mask = x_cond & y_cond & z_cond
 
-            filtered_points = np.empty(np.sum(mask), dtype=cloud.dtype)
-            filtered_points['x'] = world_xyz[mask, 0]
-            filtered_points['y'] = world_xyz[mask, 1]
-            filtered_points['z'] = world_xyz[mask, 2]
-            filtered_points['rgb'] = cloud['rgb'][mask]
+            # 영역 내 포인트가 충분한지 확인
+            if np.sum(region_mask) < 10:
+                self.region_info_label.setText(f"영역: 활성화 (포인트 부족: {np.sum(region_mask)}개)")
+                self.publish_object_markers([], delete=True)
+                self.objects_count_label.setText("감지된 물체: 0개")
+                return
 
-            self.filter_info_label.setText(f"필터: 활성화 ({len(filtered_points)} 포인트)")
+            # 영역 내 포인트 추출
+            region_points = world_xyz[region_mask]
+            region_colors = cloud['rgb'][region_mask]
 
-            if len(filtered_points) > 0:
-                self.publish_filtered_cloud(filtered_points)
-            else:
-                rospy.logwarn("필터링된 포인트 없음")
+            # 평면(바닥) Z 높이 추정 - 히스토그램 방식
+            z_values = region_points[:, 2]
+            hist, bin_edges = np.histogram(z_values, bins=50)
+            dominant_bin_idx = np.argmax(hist)
+            ground_z = (bin_edges[dominant_bin_idx] + bin_edges[dominant_bin_idx + 1]) / 2
+
+            # 평면보다 높은 포인트 선택 (물체 후보)
+            object_mask = z_values > (ground_z + self.height_threshold)
+            if np.sum(object_mask) < self.min_points:
+                self.region_info_label.setText(f"영역: 활성화 (물체 포인트 부족: {np.sum(object_mask)}개)")
+                self.publish_object_markers([], delete=True)
+                self.objects_count_label.setText("감지된 물체: 0개")
+                return
+
+            # 물체 후보 포인트 추출
+            object_points = region_points[object_mask]
+
+            # 클러스터링으로 개별 물체 감지 (DBSCAN 알고리즘)
+            clustering = DBSCAN(eps=self.cluster_distance, min_samples=self.min_points).fit(object_points)
+            labels = clustering.labels_
+
+            # 클러스터 수 계산 (-1은 노이즈 포인트)
+            n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+
+            # 각 클러스터의 중심점 계산
+            object_centers = []
+            for i in range(n_clusters):
+                cluster_points = object_points[labels == i]
+                if len(cluster_points) >= self.min_points:
+                    # 물체의 중심점 계산
+                    center = np.mean(cluster_points, axis=0)
+                    # 물체의 높이 계산
+                    height = np.max(cluster_points[:, 2]) - ground_z
+                    # 물체 정보 저장
+                    object_centers.append({
+                        'center': center,
+                        'height': height,
+                        'num_points': len(cluster_points)
+                    })
+
+            # 감지된 물체 정보 업데이트
+            self.detected_objects = object_centers
+            self.objects_count_label.setText(f"감지된 물체: {len(object_centers)}개")
+            
+            # 영역 내 물체 정보 업데이트
+            self.region_info_label.setText(f"영역: 활성화 ({len(object_centers)}개 물체 감지, 기준 Z: {ground_z:.3f}m)")
+
+            # 물체 중심 마커 발행
+            self.publish_object_markers(object_centers)
 
         except Exception as e:
-            rospy.logerr(f"[apply_filter] 오류: {e}")
+            rospy.logerr(f"[detect_objects] 오류: {e}")
             import traceback
             rospy.logerr(traceback.format_exc())
-
-    def publish_filtered_cloud(self, filtered_points):
-        """NumPy 기반 포인트클라우드 발행"""
-        from std_msgs.msg import Header
-
-        header = Header()
-        header.stamp = rospy.Time.now()
-        header.frame_id = "base_link"
-        fields = [
-            PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
-            PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
-            PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
-            PointField(name='rgb', offset=12, datatype=PointField.FLOAT32, count=1),
-        ]
-
-        self.filtered_cloud_pub.publish(pc2.create_cloud(header, fields, filtered_points))
-
-    def publish_filter_box_marker(self, delete=False):
-        """필터 영역을 표시하는 마커 발행 (월드 좌표계 기준)"""
-        if not self.visualize_filter and not delete:
+    
+    def publish_object_markers(self, objects, delete=False):
+        """감지된 물체 중심에 마커 발행"""
+        marker_array = MarkerArray()
+        
+        if delete:
+            # 기존 마커 삭제
+            marker = Marker()
+            marker.header.frame_id = "base_link"
+            marker.header.stamp = rospy.Time.now()
+            marker.ns = "detected_objects"
+            marker.id = 0
+            marker.action = Marker.DELETEALL
+            marker_array.markers.append(marker)
+            self.object_markers_pub.publish(marker_array)
+            return
+        
+        # 각 물체마다 마커 생성
+        for i, obj in enumerate(objects):
+            marker = Marker()
+            marker.header.frame_id = "base_link"
+            marker.header.stamp = rospy.Time.now()
+            marker.ns = "detected_objects"
+            marker.id = i
+            marker.type = Marker.SPHERE
+            marker.action = Marker.ADD
+            
+            # 물체 중심점 설정
+            marker.pose.position.x = obj['center'][0]
+            marker.pose.position.y = obj['center'][1]
+            marker.pose.position.z = obj['center'][2]
+            
+            # 마커 방향 (기본값)
+            marker.pose.orientation.x = 0.0
+            marker.pose.orientation.y = 0.0
+            marker.pose.orientation.z = 0.0
+            marker.pose.orientation.w = 1.0
+            
+            # 마커 크기 (높이에 비례하게 설정)
+            size = max(0.02, min(0.05, obj['height'] * 0.8))  # 물체 높이의 80%로 하되 최소 2cm, 최대 5cm
+            marker.scale.x = size
+            marker.scale.y = size
+            marker.scale.z = size
+            
+            # 마커 색상 (초록색)
+            marker.color.r = 0.0
+            marker.color.g = 1.0
+            marker.color.b = 0.0
+            marker.color.a = 0.8
+            
+            # 마커 유지 시간
+            marker.lifetime = rospy.Duration(1.0)  # 1초
+            
+            marker_array.markers.append(marker)
+        
+        # 마커 배열 발행
+        if marker_array.markers:
+            self.object_markers_pub.publish(marker_array)
+    
+    def publish_region_box_marker(self, delete=False):
+        """영역을 표시하는 마커 발행 (월드 좌표계 기준)"""
+        if not self.visualize_region and not delete:
             return
         
         marker = Marker()
         # 월드 좌표계로 명시적 설정
         marker.header.frame_id = "base_link"  # 월드 좌표계
         marker.header.stamp = rospy.Time.now()
-        marker.ns = "filter_box"
+        marker.ns = "region_box"
         marker.id = 0
         
-        if delete or not self.filter_enabled:
+        if delete or not self.region_enabled:
             marker.action = Marker.DELETE
         else:
             marker.action = Marker.ADD
             marker.type = Marker.CUBE
             
-            # 필터 영역의 중심 계산 (월드 좌표계 기준)
+            # 영역의 중심 계산 (월드 좌표계 기준)
             center_x = (self.x_min + self.x_max) / 2
             center_y = (self.y_min + self.y_max) / 2
             center_z = (self.z_min + self.z_max) / 2
@@ -521,7 +661,7 @@ class CameraTab(QWidget):
             marker.pose.orientation.z = 0.0
             marker.pose.orientation.w = 1.0
             
-            # 마커 크기 (필터 영역의 크기)
+            # 마커 크기 (영역의 크기)
             marker.scale.x = max(0.001, abs(self.x_max - self.x_min))
             marker.scale.y = max(0.001, abs(self.y_max - self.y_min))
             marker.scale.z = max(0.001, abs(self.z_max - self.z_min))
@@ -534,13 +674,9 @@ class CameraTab(QWidget):
             
             # 마커가 계속 표시되도록 설정
             marker.lifetime = rospy.Duration(0)
-            
-            # 디버깅을 위한 로그 출력
-            # rospy.loginfo_throttle(5.0, f"필터 박스 마커 발행: 중심({center_x:.3f}, {center_y:.3f}, {center_z:.3f}), " + 
-            #               f"크기({marker.scale.x:.3f} x {marker.scale.y:.3f} x {marker.scale.z:.3f})")
         
         # 마커 발행
-        self.marker_pub.publish(marker)
+        self.region_marker_pub.publish(marker)
     
     def on_mouse_moved(self, pos):
         """마우스 이동 이벤트 처리 - 스로틀링 적용"""
@@ -562,7 +698,6 @@ class CameraTab(QWidget):
             self.image_type_label.setText("깊이 이미지")
             self.display_button.setText("컬러 이미지 보기")
     
-
     def pixel_to_world(self, x, y, depth):
         if self.camera_info is None or depth <= 0:
             return None
@@ -581,7 +716,7 @@ class CameraTab(QWidget):
 
             # 카메라 기준 좌표 (회전 없이 순수한 좌표)
             camera_point = PointStamped()
-            camera_point.header.frame_id = self.camera_info.header.frame_id  # 보통 camera_link 또는 optical frame
+            camera_point.header.frame_id = self.camera_info.header.frame_id
             camera_point.header.stamp = rospy.Time(0)
             camera_point.point.x = x_cam
             camera_point.point.y = y_cam
@@ -595,7 +730,6 @@ class CameraTab(QWidget):
             rospy.logerr(f"[pixel_to_world] 변환 실패: {e}")
             return None
 
-    
     def update_depth_value(self):
         """마우스 위치의 깊이 값 및 월드 좌표 업데이트"""
         if self.depth_image is None or self.color_image is None:
@@ -632,12 +766,12 @@ class CameraTab(QWidget):
                 z_mm = world_point.z * 1000
                 self.world_coord_label.setText(f"wld:({x_mm:.0f},{y_mm:.0f},{z_mm:.0f})")
                 
-                # 현재 포인트가 필터 범위 내에 있는지 확인
-                if (self.filter_enabled and 
+                # 현재 포인트가 영역 범위 내에 있는지 확인
+                if (self.region_enabled and 
                     self.x_min <= world_point.x <= self.x_max and
                     self.y_min <= world_point.y <= self.y_max and
                     self.z_min <= world_point.z <= self.z_max):
-                    # 필터 범위 내 포인트 강조
+                    # 영역 범위 내 포인트 강조
                     self.world_coord_label.setStyleSheet("font-weight: bold; color: green;")
                 else:
                     self.world_coord_label.setStyleSheet("font-weight: bold;")
@@ -698,4 +832,5 @@ class CameraTab(QWidget):
             self.marker_timer.stop()
         
         # 마지막으로 마커 제거 (삭제)
-        self.publish_filter_box_marker(delete=True)
+        self.publish_region_box_marker(delete=True)
+        self.publish_object_markers([], delete=True)

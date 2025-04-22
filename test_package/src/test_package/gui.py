@@ -76,7 +76,16 @@ class URControlGUI(QMainWindow):
         # 계획 및 실행 완료 후 자동 업데이트를 위한 플래그
         self.auto_update_after_movement = True
         self.has_current_plan = False  # 현재 plan의 존재 여부를 추적하는 플래그
-    
+
+        camera_tab = self.tabs.findChild(QWidget, "camera_tab")
+        if camera_tab and hasattr(camera_tab, 'set_robot_controller'):
+            # 현재 로봇 Z 위치 전달
+            current_z = self.current_tcp[2] if hasattr(self, 'current_tcp') else 200.0
+            camera_tab.set_robot_controller(self.robot_controller, current_z)
+            
+            # 물체 감지 탭의 이동 신호 연결
+            camera_tab.move_to_object.connect(self.handle_object_move)
+
     def initial_update(self):
         """GUI 초기화 후 조인트 및 TCP 값을 입력 필드에 설정"""
         self.update_joint_inputs()
@@ -1052,6 +1061,23 @@ class URControlGUI(QMainWindow):
                 self.log_label.setText(message)
                 self.log_label.setStyleSheet("color: red;")
     
+    def handle_object_move(self, x, y, z, rx, ry, rz):
+        """물체 감지 탭에서 온 이동 요청 처리"""
+        # TCP 입력 필드 업데이트
+        self.tcp_inputs[0].setText(f"{x:.2f}")
+        self.tcp_inputs[1].setText(f"{y:.2f}")
+        self.tcp_inputs[2].setText(f"{z:.2f}")
+        self.tcp_inputs[3].setText(f"{rx:.2f}")
+        self.tcp_inputs[4].setText(f"{ry:.2f}")
+        self.tcp_inputs[5].setText(f"{rz:.2f}")
+        
+        # TCP 탭으로 이동
+        self.tabs.setCurrentIndex(0)  # 로봇 제어 탭으로 이동
+        self.control_tabs.setCurrentIndex(1)  # TCP 이동 탭으로 이동
+        
+        # 계획 버튼 클릭
+        self.plan_tcp_movement()
+
     def closeEvent(self, event):
         """창이 닫힐 때 호출되는 이벤트 핸들러"""
         # 로봇 컨트롤러 정리

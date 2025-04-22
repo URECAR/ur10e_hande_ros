@@ -13,8 +13,8 @@ import tf2_ros
 import tf2_geometry_msgs
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                            QGroupBox, QGridLayout, QPushButton, QFrame, QLineEdit,
-                           QCheckBox, QDoubleSpinBox, QColorDialog, QSpinBox)
-from PyQt5.QtGui import QImage, QPixmap, QColor
+                           QCheckBox, QDoubleSpinBox, QColorDialog, QSpinBox, QMessageBox)
+from PyQt5.QtGui import QImage, QPixmap, QColor, QPainter, QPen, QFont
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QPoint, QSize, QRect
 import sensor_msgs.point_cloud2 as pc2
 from sklearn.cluster import DBSCAN
@@ -23,6 +23,7 @@ from sklearn.cluster import DBSCAN
 class ImageDisplayWidget(QLabel):
     """이미지 표시 및 마우스 이벤트 처리 위젯"""
     mouse_moved = pyqtSignal(QPoint)
+    mouse_clicked = pyqtSignal(QPoint)  # 클릭 이벤트 추가
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -37,6 +38,10 @@ class ImageDisplayWidget(QLabel):
         self.image_offset_y = 0
         self.original_width = 0
         self.original_height = 0
+        
+        # 객체 오버레이를 위한 변수
+        self.object_positions = []  # 이미지 상의 객체 위치 목록
+        self.highlighted_object = -1  # 현재 강조된 객체 인덱스
     
     def setPixmap(self, pixmap):
         """픽스맵 설정 및 표시 영역 계산"""
@@ -57,10 +62,77 @@ class ImageDisplayWidget(QLabel):
         else:
             super().setPixmap(pixmap)
     
+    def setObjects(self, object_positions):
+        """감지된 객체 위치 설정"""
+        self.object_positions = object_positions
+        self.update()  # 위젯 다시 그리기
+    
+    def paintEvent(self, event):
+        """위젯 페인트 이벤트 - 픽스맵 위에 객체 오버레이 그리기"""
+        super().paintEvent(event)
+        
+        if not self.object_positions:
+            return
+            
+        # QPainter 생성
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # 각 객체 위치에 원 그리기
+        for i, pos in enumerate(self.object_positions):
+            # 강조 여부에 따라 색상 설정
+            if i == self.highlighted_object:
+                painter.setPen(QPen(QColor(255, 50, 50), 2))  # 빨간색, 두께 2
+                painter.setBrush(QColor(255, 100, 100, 100))  # 반투명 빨간색
+                size = 24  # 강조된 객체는 더 크게
+            else:
+                painter.setPen(QPen(QColor(50, 255, 50), 2))  # 녹색, 두께 2
+                painter.setBrush(QColor(100, 255, 100, 100))  # 반투명 녹색
+                size = 18
+                
+            # 원 그리기
+            painter.drawEllipse(pos.x() - size/2, pos.y() - size/2, size, size)
+            
+            # 번호 표시
+            painter.setPen(QColor(0, 0, 0))
+            painter.setFont(QFont("Arial", 10, QFont.Bold))
+            painter.drawText(QRect(pos.x() - size/2, pos.y() - size/2, size, size), 
+                            Qt.AlignCenter, str(i+1))
+        
+        painter.end()
+    
     def mouseMoveEvent(self, event):
         """마우스 움직임 이벤트 처리"""
         self.mouse_moved.emit(event.pos())
+        
+        # 마우스가 객체 위에 있는지 확인
+        old_highlight = self.highlighted_object
+        self.highlighted_object = -1
+        
+        for i, pos in enumerate(self.object_positions):
+            # 마우스와 객체 중심 사이의 거리 계산
+            distance = ((event.x() - pos.x())**2 + (event.y() - pos.y())**2)**0.5
+            if distance < 15:  # 15픽셀 이내면 강조
+                self.highlighted_object = i
+                self.setCursor(Qt.PointingHandCursor)  # 손가락 커서로 변경
+                break
+        
+        # 강조된 객체가 변경되었으면 다시 그리기
+        if old_highlight != self.highlighted_object:
+            self.update()
+            
+        # 객체 위에 없으면 기본 커서로 돌아가기
+        if self.highlighted_object == -1:
+            self.setCursor(Qt.CrossCursor)
+            
         super().mouseMoveEvent(event)
+    
+    def mouseReleaseEvent(self, event):
+        """마우스 클릭 이벤트 처리"""
+        # 왼쪽 버튼 클릭 & 객체 위에 있을 때만 처리
+        if event.button() == Qt.LeftButton and self.highlighted_object != -1:
+            self.mouse_clicked.emit(event.pos())
+        super().mouseReleaseEvent(event)
     
     def getImageCoordinates(self, mouse_pos):
         """마우스 화면 좌표를 이미지 원본 좌표로 변환"""
@@ -79,6 +151,9 @@ class ImageDisplayWidget(QLabel):
 class CameraTab(QWidget):
     """카메라 탭 위젯 - 물체 감지 기능 추가"""
     
+    # 로봇 이동 명령 신호 추가
+    move_to_object = pyqtSignal(float, float, float, float, float, float)
+    
     def __init__(self):
         super().__init__()
         self.bridge = CvBridge()
@@ -96,17 +171,21 @@ class CameraTab(QWidget):
         
         # 영역 파라미터
         self.region_enabled = False
-        self.x_min = 0.48
+        self.x_min = 0.41
         self.x_max = 0.67
-        self.y_min = -0.15
-        self.y_max = 0.37
-        self.z_min = 0.10
-        self.z_max = 0.25
+        self.y_min = -0.10
+        self.y_max = 0.32
+        self.z_min = 0.14
+        self.z_max = 0.30
+        
+        # 로봇 제어 관련 변수
+        self.robot_controller = None  # 나중에 설정됨
+        self.current_robot_z = 0.2    # 기본값
         
         # 물체 감지 파라미터
-        self.height_threshold = 0.01  # 평면 위로 튀어나온 물체로 감지할 높이 임계값(m)
-        self.cluster_distance = 0.02  # 클러스터링할 때 최대 거리(m)
-        self.min_points = 10  # 클러스터로 인정할 최소 포인트 수
+        self.height_threshold = 0.015  # 평면 위로 튀어나온 물체로 감지할 높이 임계값(m)
+        self.cluster_distance = 0.035  # 클러스터링할 때 최대 거리(m)
+        self.min_points = 25  # 클러스터로 인정할 최소 포인트 수
         
         # 영역 박스 시각화 파라미터
         self.visualize_region = True
@@ -151,6 +230,7 @@ class CameraTab(QWidget):
         # 이미지 표시 위젯
         self.image_view = ImageDisplayWidget()
         self.image_view.mouse_moved.connect(self.on_mouse_moved)
+        self.image_view.mouse_clicked.connect(self.on_image_clicked)
         image_layout.addWidget(self.image_view)
         
         # 이미지 라벨 (현재 표시 중인 이미지 타입)
@@ -160,9 +240,18 @@ class CameraTab(QWidget):
         image_layout.addWidget(self.image_type_label)
         
         # 표시 모드 전환 버튼
+        button_layout = QHBoxLayout()
+        
         self.display_button = QPushButton("깊이 이미지 보기")
         self.display_button.clicked.connect(self.toggle_display_mode)
-        image_layout.addWidget(self.display_button)
+        button_layout.addWidget(self.display_button)
+        
+        # 로봇 제어 팁 추가
+        self.control_tip = QLabel("물체를 클릭하면 로봇이 해당 위치로 이동합니다")
+        self.control_tip.setStyleSheet("color: #008800; font-style: italic;")
+        button_layout.addWidget(self.control_tip)
+        
+        image_layout.addLayout(button_layout)
 
         image_group.setLayout(image_layout)
         main_layout.addWidget(image_group)
@@ -460,12 +549,12 @@ class CameraTab(QWidget):
     
     def maybe_detect_objects(self):
         """영역이 활성화된 경우에만 물체 감지 실행"""
-        if self.region_enabled and self.point_cloud:
+        if self.region_enabled and self.point_cloud is not None:
             self.detect_objects()
     
     def detect_objects(self):
         """지정된 영역 내에서 물체 감지"""
-        if not self.point_cloud:
+        if self.point_cloud is None:
             return
 
         try:
@@ -583,6 +672,9 @@ class CameraTab(QWidget):
             marker.action = Marker.DELETEALL
             marker_array.markers.append(marker)
             self.object_markers_pub.publish(marker_array)
+            
+            # 이미지 상의 객체 표시도 제거
+            self.image_view.setObjects([])
             return
         
         # 각 물체마다 마커 생성
@@ -622,10 +714,18 @@ class CameraTab(QWidget):
             marker.lifetime = rospy.Duration(1.0)  # 1초
             
             marker_array.markers.append(marker)
+            
+            # 월드 좌표를 이미지 좌표로 변환하여 저장
+            pixel_pos = self.world_to_pixel(obj['center'][0], obj['center'][1], obj['center'][2])
+            if pixel_pos:
+                obj['pixel_pos'] = pixel_pos  # 이미지 상의 위치 저장
         
         # 마커 배열 발행
         if marker_array.markers:
             self.object_markers_pub.publish(marker_array)
+            
+            # 이미지 상에 물체 위치 표시 업데이트
+            self.update_image_objects(objects)
     
     def publish_region_box_marker(self, delete=False):
         """영역을 표시하는 마커 발행 (월드 좌표계 기준)"""
@@ -699,6 +799,7 @@ class CameraTab(QWidget):
             self.display_button.setText("컬러 이미지 보기")
     
     def pixel_to_world(self, x, y, depth):
+        """이미지 좌표를 월드 좌표로 변환"""
         if self.camera_info is None or depth <= 0:
             return None
         try:
@@ -728,6 +829,51 @@ class CameraTab(QWidget):
 
         except Exception as e:
             rospy.logerr(f"[pixel_to_world] 변환 실패: {e}")
+            return None
+            
+    def world_to_pixel(self, x, y, z):
+        """월드 좌표를 이미지 좌표로 변환"""
+        if self.camera_info is None or self.color_image is None:
+            return None
+            
+        try:
+            # 월드 좌표 포인트 생성
+            world_point = PointStamped()
+            world_point.header.frame_id = "base_link"
+            world_point.header.stamp = rospy.Time(0)
+            world_point.point.x = x
+            world_point.point.y = y
+            world_point.point.z = z
+            
+            # 카메라 프레임으로 변환
+            camera_point = self.tf_buffer.transform(world_point, self.camera_info.header.frame_id, rospy.Duration(0.2))
+            
+            # 카메라 내부 파라미터
+            k_matrix = np.array(self.camera_info.K).reshape(3, 3)
+            fx = k_matrix[0, 0]
+            fy = k_matrix[1, 1]
+            cx = k_matrix[0, 2]
+            cy = k_matrix[1, 2]
+            
+            # 카메라 좌표계에서 이미지 좌표계로 변환
+            if camera_point.point.z <= 0:
+                return None
+                
+            pixel_x = int(fx * camera_point.point.x / camera_point.point.z + cx)
+            pixel_y = int(fy * camera_point.point.y / camera_point.point.z + cy)
+            
+            # 이미지 범위 확인
+            h, w = self.color_image.shape[:2]
+            if 0 <= pixel_x < w and 0 <= pixel_y < h:
+                # UI 좌표로 변환 (이미지 좌표 → 위젯 좌표)
+                widget_x = int(pixel_x * self.image_view.scaled_image_width / w) + self.image_view.image_offset_x
+                widget_y = int(pixel_y * self.image_view.scaled_image_height / h) + self.image_view.image_offset_y
+                return QPoint(widget_x, widget_y)
+            
+            return None
+            
+        except Exception as e:
+            rospy.logerr(f"[world_to_pixel] 변환 실패: {e}")
             return None
 
     def update_depth_value(self):
@@ -795,6 +941,10 @@ class CameraTab(QWidget):
             pixmap = QPixmap.fromImage(qt_image)
             self.image_view.setPixmap(pixmap)
             
+            # 감지된 물체가 있으면 이미지 위에 표시 업데이트
+            if hasattr(self, 'detected_objects') and self.detected_objects:
+                self.update_image_objects(self.detected_objects)
+            
         elif self.display_mode == 1 and self.depth_image is not None:
             # 깊이 이미지 표시
             try:
@@ -813,8 +963,83 @@ class CameraTab(QWidget):
                 qt_depth = QImage(depth_colormap.data, w, h, bytes_per_line, QImage.Format_RGB888)
                 pixmap = QPixmap.fromImage(qt_depth)
                 self.image_view.setPixmap(pixmap)
+                
+                # 감지된 물체가 있으면 이미지 위에 표시 업데이트
+                if hasattr(self, 'detected_objects') and self.detected_objects:
+                    self.update_image_objects(self.detected_objects)
             except Exception as e:
                 rospy.logerr(f"깊이 이미지 시각화 오류: {e}")
+                
+    def update_image_objects(self, objects):
+        """감지된 물체 위치를 이미지에 표시"""
+        if self.color_image is None:
+            return
+            
+        # 각 물체의 이미지 상 위치 계산
+        object_positions = []
+        for obj in objects:
+            # 이미 계산된 pixel_pos가 있는지 확인
+            if 'pixel_pos' in obj and obj['pixel_pos']:
+                object_positions.append(obj['pixel_pos'])
+            else:
+                # 월드 좌표를 이미지 좌표로 변환
+                pixel_pos = self.world_to_pixel(obj['center'][0], obj['center'][1], obj['center'][2])
+                if pixel_pos:
+                    obj['pixel_pos'] = pixel_pos
+                    object_positions.append(pixel_pos)
+        
+        # 이미지에 객체 위치 설정
+        self.image_view.setObjects(object_positions)
+    
+    def on_image_clicked(self, pos):
+        """이미지 클릭 이벤트 처리 - 물체 선택"""
+        # 강조된 물체가 있는지 확인
+        if self.image_view.highlighted_object == -1 or not hasattr(self, 'detected_objects'):
+            return
+            
+        try:
+            # 선택된 물체 정보 가져오기
+            obj_idx = self.image_view.highlighted_object
+            if obj_idx >= len(self.detected_objects):
+                return
+                
+            obj = self.detected_objects[obj_idx]
+            
+            # 로봇을 물체 위치로 이동시키기 위한 파라미터 계산
+            x_mm = obj['center'][0] * 1000  # m -> mm
+            y_mm = obj['center'][1] * 1000  # m -> mm
+            
+            # Z 위치는 현재 로봇의 Z 값 유지
+            # 로봇 컨트롤러가 설정되어 있지 않으면 현재 위치를 알 수 없으므로 기본값 사용
+            if self.robot_controller:
+                # 로봇 컨트롤러에서 현재 TCP Z 좌표 가져오기 (이미 mm 단위)
+                z_mm = self.current_robot_z
+            else:
+                # 기본값 사용 (200mm)
+                z_mm = 200.0
+                
+            # 방향 값은 현재 유지 (로봇 컨트롤러에서 가져오거나 기본값 사용)
+            rx, ry, rz = 180.0, 0.0, 90.0  # 기본값
+            
+            # 로봇 이동 신호 발생
+            self.move_to_object.emit(x_mm, y_mm, z_mm, rx, ry, rz)
+            
+            # 사용자에게 피드백
+            rospy.loginfo(f"물체 {obj_idx+1}번 클릭됨: 위치 ({x_mm:.1f}, {y_mm:.1f}, {z_mm:.1f})")
+            QMessageBox.information(self, "물체 선택됨", 
+                                  f"물체 {obj_idx+1}번 위치로 로봇 이동 계획 중...\n"
+                                  f"위치: X={x_mm:.1f}mm, Y={y_mm:.1f}mm, Z={z_mm:.1f}mm")
+            
+        except Exception as e:
+            rospy.logerr(f"물체 클릭 처리 오류: {e}")
+            QMessageBox.warning(self, "오류", f"물체 위치로 이동 중 오류 발생: {str(e)}")
+    
+    def set_robot_controller(self, controller, current_z=None):
+        """로봇 컨트롤러 설정"""
+        self.robot_controller = controller
+        
+        if current_z is not None:
+            self.current_robot_z = current_z
     
     def closeEvent(self, event):
         """닫기 이벤트 처리"""

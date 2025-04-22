@@ -8,6 +8,7 @@ Panels:
         - /MotionPlanning1/Planned Path1
         - /PointCloud2(Camera)1
         - /DepthCloud1/Auto Size1
+        - /Marker1
       Splitter Ratio: 0.5
     Tree Height: 819
   - Class: rviz/Help
@@ -386,7 +387,7 @@ Visualization Manager:
       Value: false
     - Class: rviz/Marker
       Enabled: true
-      Marker Topic: /filter_box_marker
+      Marker Topic: /region_box_marker
       Name: Marker
       Namespaces:
         {}
@@ -433,9 +434,9 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.7097964882850647
+      Pitch: 1.0947965383529663
       Target Frame: base_link
-      Yaw: 1.402203917503357
+      Yaw: 1.4072039127349854
     Saved: ~
 Window Geometry:
   Displays:

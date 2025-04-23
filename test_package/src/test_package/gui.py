@@ -1248,7 +1248,7 @@ class URControlGUI(QMainWindow):
         
         # TCP 탭으로 이동
         self.tabs.setCurrentIndex(0)  # 로봇 제어 탭으로 이동
-        self.control_tabs.setCurrentIndex(1)  # TCP 이동 탭으로 이동
+        self.control_tabs.setCurrentIndex(0)  # TCP 이동 탭으로 이동
         
         # 계획 버튼 클릭
         self.plan_tcp_movement()

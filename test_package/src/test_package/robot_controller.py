@@ -168,13 +168,13 @@ class ExecutionThread(QThread):
             
             # 성공 여부에 따라 신호 발생
             if success:
-                self.execution_finished.emit(True, "계획 실행 성공")
+                self.execution_finished.emit(True, "Execute 성공")
             else:
-                self.execution_finished.emit(False, "계획 실행 실패")
+                self.execution_finished.emit(False, "Execute 실패")
         
         except Exception as e:
-            self.execution_finished.emit(False, f"계획 실행 오류: {str(e)}")
-            rospy.logerr(f"계획 실행 오류: {e}")
+            self.execution_finished.emit(False, f"Execute 오류: {str(e)}")
+            rospy.logerr(f"Execute 오류: {e}")
 
 
 class URRobotController(QObject):

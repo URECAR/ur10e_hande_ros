@@ -156,7 +156,6 @@ class CameraTab(QWidget):
     
     def __init__(self):
         super().__init__()
-        self.setObjectName("camera_tab")  # 객체 이름 설정
         self.bridge = CvBridge()
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
@@ -181,11 +180,7 @@ class CameraTab(QWidget):
         
         # 로봇 제어 관련 변수
         self.robot_controller = None  # 나중에 설정됨
-        self.current_robot_z = 400.0  # 기본값 (mm 단위로 변경)
-        self.current_robot_rx = 180.0  # 기본값
-        self.current_robot_ry = 0.0    # 기본값
-        self.current_robot_rz = 90.0   # 기본값
-        self.auto_execute = True       # 계획 성공 시 자동 실행 여부
+        self.current_robot_z = 0.2    # 기본값
         
         # 물체 감지 파라미터
         self.height_threshold = 0.015  # 평면 위로 튀어나온 물체로 감지할 높이 임계값(m)
@@ -221,12 +216,7 @@ class CameraTab(QWidget):
         self.marker_timer.timeout.connect(self.publish_region_box_marker)
         self.marker_timer.start(500)  # 2Hz로 마커 업데이트
         
-        # 로봇 계획 성공/실패 신호 연결을 위한 변수
-        self.planning_successful = False
-        self.last_selected_object = None
-        
-        rospy.loginfo("카메라 탭 초기화 완료")
-    
+        rospy.loginfo("카메라 탭 초기화 완료 - 물체 감지 기능 추가")
     
     def init_ui(self):
         """UI 초기화"""
@@ -1036,7 +1026,10 @@ class CameraTab(QWidget):
             
             # 사용자에게 피드백
             rospy.loginfo(f"물체 {obj_idx+1}번 클릭됨: 위치 ({x_mm:.1f}, {y_mm:.1f}, {z_mm:.1f})")
-
+            QMessageBox.information(self, "물체 선택됨", 
+                                  f"물체 {obj_idx+1}번 위치로 로봇 이동 계획 중...\n"
+                                  f"위치: X={x_mm:.1f}mm, Y={y_mm:.1f}mm, Z={z_mm:.1f}mm")
+            
         except Exception as e:
             rospy.logerr(f"물체 클릭 처리 오류: {e}")
             QMessageBox.warning(self, "오류", f"물체 위치로 이동 중 오류 발생: {str(e)}")
@@ -1045,81 +1038,8 @@ class CameraTab(QWidget):
         """로봇 컨트롤러 설정"""
         self.robot_controller = controller
         
-        # 현재 TCP 위치 저장 (Z 높이, 회전 각도)
         if current_z is not None:
             self.current_robot_z = current_z
-        
-        # 계획 결과 신호 연결
-        if self.robot_controller:
-            self.robot_controller.planning_result.connect(self.on_planning_result)
-            
-            # 현재 자세값 (rx, ry, rz) 업데이트를 위한 신호 연결
-            self.robot_controller.pose_updated.connect(self.update_current_pose)
-    
-    # 추가된 함수: 현재 로봇 포즈 업데이트
-    def update_current_pose(self, x, y, z, rx, ry, rz):
-        """현재 로봇 포즈 정보 업데이트"""
-        self.current_robot_z = z   # 단위: mm
-        self.current_robot_rx = rx
-        self.current_robot_ry = ry
-        self.current_robot_rz = rz
-    
-    # 추가된 함수: 계획 결과 처리
-    def on_planning_result(self, success, message):
-        """로봇 계획 결과 처리"""
-        if "계획" in message:  # 계획 단계 메시지인 경우
-            self.planning_successful = success
-            
-            # 계획이 성공하고 자동 실행이 활성화되어 있으면 실행
-            if success and self.auto_execute and self.last_selected_object is not None:
-                rospy.loginfo(f"물체 위치 이동 계획 성공! 자동 실행 시작 - 물체 {self.last_selected_object+1}번")
-                self.execute_motion()
-                self.last_selected_object = None  # 실행 후 초기화
-            elif not success:
-                rospy.logwarn(f"물체 위치 이동 계획 실패: {message}")
-    
-    # 추가된 함수: 로봇 모션 실행
-    def execute_motion(self):
-        """현재 계획된 모션 실행"""
-        if self.robot_controller:
-            self.robot_controller.execute_plan()
-    
-    # 수정된 함수: 이미지 클릭 처리
-    def on_image_clicked(self, pos):
-        """이미지 클릭 이벤트 처리 - 물체 선택"""
-        # 강조된 물체가 있는지 확인
-        if self.image_view.highlighted_object == -1 or not hasattr(self, 'detected_objects'):
-            return
-            
-        try:
-            # 선택된 물체 정보 가져오기
-            obj_idx = self.image_view.highlighted_object
-            if obj_idx >= len(self.detected_objects):
-                return
-                
-            obj = self.detected_objects[obj_idx]
-            self.last_selected_object = obj_idx  # 선택된 물체 인덱스 저장
-            
-            # 로봇을 물체 위치로 이동시키기 위한 파라미터 계산
-            x_mm = obj['center'][0] * 1000  # m -> mm
-            y_mm = obj['center'][1] * 1000  # m -> mm
-            
-            # Z 위치는 고정값(400mm) 사용
-            z_mm = 400.0
-            
-            # 방향 값은 현재 로봇 방향 유지
-            rx, ry, rz = self.current_robot_rx, self.current_robot_ry, self.current_robot_rz
-            
-            # 로봇 이동 신호 발생
-            self.move_to_object.emit(x_mm, y_mm, z_mm, rx, ry, rz)
-            
-            # 사용자에게 피드백
-            rospy.loginfo(f"물체 {obj_idx+1}번 클릭됨: 위치 ({x_mm:.1f}, {y_mm:.1f}, {z_mm:.1f}) 이동 계획 중...")
-            
-        except Exception as e:
-            rospy.logerr(f"물체 클릭 처리 오류: {e}")
-            QMessageBox.warning(self, "오류", f"물체 위치로 이동 중 오류 발생: {str(e)}")
-        
     
     def closeEvent(self, event):
         """닫기 이벤트 처리"""

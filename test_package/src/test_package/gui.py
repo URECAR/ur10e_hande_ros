@@ -4,15 +4,31 @@ import time
 import os
 import json
 import rospy
+from std_msgs.msg import Bool, Int8  # 또는 적절한 메시지 타입 (예: UInt8, UInt32)
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                            QLabel, QGroupBox, QGridLayout, QFrame, QPushButton, QLineEdit, 
                            QTabWidget, QSlider, QListWidget, QInputDialog, QMessageBox, QDialog,
                            QRadioButton, QDialogButtonBox)
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont
+from ur_dashboard_msgs.msg import RobotMode 
 
 # Import our new camera tab
 from test_package.camera_tab import CameraTab
+
+class ClickableLabel(QLabel):
+    """클릭 이벤트를 가진 QLabel"""
+    clicked = pyqtSignal()
+    
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self.setCursor(Qt.PointingHandCursor)  # 마우스 커서를 손가락 모양으로 변경
+    
+    def mouseReleaseEvent(self, event):
+        """마우스 클릭 이벤트 처리"""
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
 
 class URControlGUI(QMainWindow):
     """UR 로봇 제어 및 모니터링 GUI"""
@@ -31,6 +47,10 @@ class URControlGUI(QMainWindow):
         # 선택된 포즈 추적
         self.selected_pose_name = None
         
+        # UR 로봇 상태 변수 추가
+        self.robot_mode = 0
+        self.program_running = False
+        
         # 신호 연결
         self.robot_controller.pose_updated.connect(self.update_pose_display)
         self.robot_controller.joints_updated.connect(self.update_joints_display)
@@ -40,6 +60,9 @@ class URControlGUI(QMainWindow):
 
         # UI 초기화
         self.init_ui()
+        
+        # 로봇 상태 구독 설정
+        self.setup_robot_status_subscribers()
         
         # 마지막 업데이트 시간 초기화
         self.last_update_time = time.time()
@@ -112,11 +135,20 @@ class URControlGUI(QMainWindow):
         status_frame.setFrameShadow(QFrame.Raised)
         status_layout = QHBoxLayout(status_frame)
         
+        # 연결 상태 레이블
         self.connection_status_label = QLabel("상태: 초기화 중...")
         status_layout.addWidget(self.connection_status_label)
         
-        # 프로그램 상태 레이블
-        self.program_state_label = QLabel("프로그램 상태: 불명")
+        # 로봇 모드 레이블
+        self.robot_mode_label = QLabel("로봇 모드: 알 수 없음")
+        self.robot_mode_label.setStyleSheet("color: gray; font-weight: bold;")
+        status_layout.addWidget(self.robot_mode_label)
+        
+        # 프로그램 상태 레이블 (클릭 가능하게 변경)
+        self.program_state_label = ClickableLabel("프로그램 상태: 불명")
+        self.program_state_label.setStyleSheet("color: gray; font-weight: bold;")
+        self.program_state_label.setToolTip("클릭하여 프로그램 실행/정지")
+        self.program_state_label.clicked.connect(self.toggle_program_state)
         status_layout.addWidget(self.program_state_label)
         
         main_layout.addWidget(status_frame)
@@ -195,84 +227,7 @@ class URControlGUI(QMainWindow):
         # 제어 탭 위젯
         self.control_tabs = QTabWidget()
         
-        # 조인트 이동 탭
-        joint_tab = QWidget()
-        joint_layout = QVBoxLayout(joint_tab)
-        
-        # 속도 및 가속도 슬라이더 그룹
-        joint_slider_group = QGroupBox("속도 및 가속도 설정")
-        joint_slider_layout = QGridLayout()
-        
-        # 속도 슬라이더
-        joint_slider_layout.addWidget(QLabel("속도:"), 0, 0)
-        self.joint_velocity_slider = QSlider(Qt.Horizontal)
-        self.joint_velocity_slider.setRange(1, 100)
-        self.joint_velocity_slider.setValue(25)
-        self.joint_velocity_slider.setTickPosition(QSlider.TicksBelow)
-        self.joint_velocity_slider.setTickInterval(10)
-        self.joint_velocity_value = QLabel("25%")
-        self.joint_velocity_slider.valueChanged.connect(
-            lambda value: self.joint_velocity_value.setText(f"{value}%")
-        )
-        joint_slider_layout.addWidget(self.joint_velocity_slider, 0, 1)
-        joint_slider_layout.addWidget(self.joint_velocity_value, 0, 2)
-        
-        # 가속도 슬라이더
-        joint_slider_layout.addWidget(QLabel("가속도:"), 1, 0)
-        self.joint_accel_slider = QSlider(Qt.Horizontal)
-        self.joint_accel_slider.setRange(1, 100)
-        self.joint_accel_slider.setValue(25)
-        self.joint_accel_slider.setTickPosition(QSlider.TicksBelow)
-        self.joint_accel_slider.setTickInterval(10)
-        self.joint_accel_value = QLabel("25%")
-        self.joint_accel_slider.valueChanged.connect(
-            lambda value: self.joint_accel_value.setText(f"{value}%")
-        )
-        joint_slider_layout.addWidget(self.joint_accel_slider, 1, 1)
-        joint_slider_layout.addWidget(self.joint_accel_value, 1, 2)
-        
-        joint_slider_group.setLayout(joint_slider_layout)
-        joint_layout.addWidget(joint_slider_group)
-        
-        joint_input_group = QGroupBox("조인트 공간 이동")
-        joint_input_layout = QGridLayout()
-        
-        # 조인트 입력 필드 생성
-        self.joint_inputs = []
-        joint_names = ["베이스", "숄더", "엘보", "손목 1", "손목 2", "손목 3"]
-
-        for i, name in enumerate(joint_names):
-            row = i % 3  # 3개씩 세로로 배치
-            col = i // 3 * 3  # 2열씩 배치 (라벨 + 입력필드)
-
-            joint_input_layout.addWidget(QLabel(f"{name} :"), row, col)
-            joint_input = QLineEdit("0.00")
-            self.joint_inputs.append(joint_input)
-            joint_input_layout.addWidget(joint_input, row, col + 1)
-
-        joint_input_group.setLayout(joint_input_layout)
-        joint_layout.addWidget(joint_input_group)
-        
-        # 업데이트 버튼
-        self.update_joint_button = QPushButton("Update")
-        self.update_joint_button.clicked.connect(self.update_joint_inputs)
-        joint_layout.addWidget(self.update_joint_button)
-        
-        # 버튼 레이아웃
-        joint_button_layout = QHBoxLayout()
-        
-        self.plan_joint_button = QPushButton("계획 (Plan)")
-        self.plan_joint_button.clicked.connect(self.plan_joint_movement)
-        joint_button_layout.addWidget(self.plan_joint_button)
-        
-        self.execute_joint_button = QPushButton("실행 (Execute)")
-        self.execute_joint_button.clicked.connect(self.execute_plan)
-        joint_button_layout.addWidget(self.execute_joint_button)
-        
-        joint_layout.addLayout(joint_button_layout)
-        self.control_tabs.addTab(joint_tab, "Movej")
-        
-        # TCP 이동 탭
+        # TCP 이동 탭 (Movex) - 먼저 추가
         tcp_tab = QWidget()
         tcp_layout = QVBoxLayout(tcp_tab)
         
@@ -360,7 +315,84 @@ class URControlGUI(QMainWindow):
         tcp_layout.addLayout(tcp_button_layout)
         self.control_tabs.addTab(tcp_tab, "Movex")
         
-        # 포즈 지정 탭 추가 (새로 추가)
+        # 조인트 이동 탭 (Movej) - 두 번째로 추가
+        joint_tab = QWidget()
+        joint_layout = QVBoxLayout(joint_tab)
+        
+        # 속도 및 가속도 슬라이더 그룹
+        joint_slider_group = QGroupBox("속도 및 가속도 설정")
+        joint_slider_layout = QGridLayout()
+        
+        # 속도 슬라이더
+        joint_slider_layout.addWidget(QLabel("속도:"), 0, 0)
+        self.joint_velocity_slider = QSlider(Qt.Horizontal)
+        self.joint_velocity_slider.setRange(1, 100)
+        self.joint_velocity_slider.setValue(25)
+        self.joint_velocity_slider.setTickPosition(QSlider.TicksBelow)
+        self.joint_velocity_slider.setTickInterval(10)
+        self.joint_velocity_value = QLabel("25%")
+        self.joint_velocity_slider.valueChanged.connect(
+            lambda value: self.joint_velocity_value.setText(f"{value}%")
+        )
+        joint_slider_layout.addWidget(self.joint_velocity_slider, 0, 1)
+        joint_slider_layout.addWidget(self.joint_velocity_value, 0, 2)
+        
+        # 가속도 슬라이더
+        joint_slider_layout.addWidget(QLabel("가속도:"), 1, 0)
+        self.joint_accel_slider = QSlider(Qt.Horizontal)
+        self.joint_accel_slider.setRange(1, 100)
+        self.joint_accel_slider.setValue(25)
+        self.joint_accel_slider.setTickPosition(QSlider.TicksBelow)
+        self.joint_accel_slider.setTickInterval(10)
+        self.joint_accel_value = QLabel("25%")
+        self.joint_accel_slider.valueChanged.connect(
+            lambda value: self.joint_accel_value.setText(f"{value}%")
+        )
+        joint_slider_layout.addWidget(self.joint_accel_slider, 1, 1)
+        joint_slider_layout.addWidget(self.joint_accel_value, 1, 2)
+        
+        joint_slider_group.setLayout(joint_slider_layout)
+        joint_layout.addWidget(joint_slider_group)
+        
+        joint_input_group = QGroupBox("조인트 공간 이동")
+        joint_input_layout = QGridLayout()
+        
+        # 조인트 입력 필드 생성
+        self.joint_inputs = []
+        joint_names = ["베이스", "숄더", "엘보", "손목 1", "손목 2", "손목 3"]
+
+        for i, name in enumerate(joint_names):
+            row = i % 3  # 3개씩 세로로 배치
+            col = i // 3 * 3  # 2열씩 배치 (라벨 + 입력필드)
+
+            joint_input_layout.addWidget(QLabel(f"{name} :"), row, col)
+            joint_input = QLineEdit("0.00")
+            self.joint_inputs.append(joint_input)
+            joint_input_layout.addWidget(joint_input, row, col + 1)
+
+        joint_input_group.setLayout(joint_input_layout)
+        joint_layout.addWidget(joint_input_group)
+        
+        # 업데이트 버튼
+        self.update_joint_button = QPushButton("Update")
+        self.update_joint_button.clicked.connect(self.update_joint_inputs)
+        joint_layout.addWidget(self.update_joint_button)
+        
+        # 버튼 레이아웃
+        joint_button_layout = QHBoxLayout()
+        
+        self.plan_joint_button = QPushButton("계획 (Plan)")
+        self.plan_joint_button.clicked.connect(self.plan_joint_movement)
+        joint_button_layout.addWidget(self.plan_joint_button)
+        
+        self.execute_joint_button = QPushButton("실행 (Execute)")
+        self.execute_joint_button.clicked.connect(self.execute_plan)
+        joint_button_layout.addWidget(self.execute_joint_button)
+        
+        joint_layout.addLayout(joint_button_layout)
+        self.control_tabs.addTab(joint_tab, "Movej")
+        
+        # 포즈 지정 탭 추가 (세 번째로 추가)
         pose_tab = self.create_pose_tab()
         self.control_tabs.addTab(pose_tab, "포즈 지정")
         
@@ -581,7 +613,101 @@ class URControlGUI(QMainWindow):
         pose_control_layout.addWidget(self.execute_pose_button)
         
         return pose_control_layout
-    
+    def setup_robot_status_subscribers(self):
+        """UR 로봇 상태 구독 설정"""
+        try:
+            # 프로그램 실행 상태 구독
+            self.program_sub = rospy.Subscriber(
+                '/ur_hardware_interface/robot_program_running', 
+                Bool, 
+                self.program_status_callback
+            )
+            
+            # 로봇 모드 구독 - 올바른 메시지 타입 사용
+            self.mode_sub = rospy.Subscriber(
+                '/ur_hardware_interface/robot_mode',
+                RobotMode,  # 올바른 메시지 타입: ur_dashboard_msgs/RobotMode
+                self.robot_mode_callback
+            )
+            
+            rospy.loginfo("로봇 상태 구독자 설정 완료")
+        except Exception as e:
+            rospy.logerr(f"로봇 상태 구독 설정 오류: {e}")
+
+
+    def program_status_callback(self, msg):
+        """로봇 프로그램 실행 상태 콜백"""
+        self.program_running = msg.data
+        self.update_robot_status_display()
+        
+    def robot_mode_callback(self, msg):
+        """로봇 모드 콜백"""
+        self.robot_mode = msg.mode  # 또는 msg.data (메시지 타입에 따라 다름)
+        self.update_robot_status_display()
+
+    def update_robot_status_display(self):
+        """로봇 상태 표시 업데이트"""
+        # 로봇 모드 텍스트 및 색상 설정
+        mode_text = "알 수 없음"
+        mode_color = "black"
+        
+        # RobotMode 상수에 따른 상태 표시
+        # UR ROS 드라이버의 RobotMode 메시지 정의에 따름
+        # (참고: https://github.com/UniversalRobots/Universal_Robots_ROS_Driver/blob/master/ur_dashboard_msgs/msg/RobotMode.msg)
+        #
+        # uint8 UNKNOWN = 0
+        # uint8 NORMAL = 1
+        # uint8 REDUCED = 2
+        # uint8 PROTECTIVE_STOP = 3
+        # uint8 RECOVERY = 4
+        # uint8 IDLE = 5
+        # uint8 RUNNING = 6
+        # uint8 RESTRICTED = 7
+        # uint8 mode
+        
+        if self.robot_mode == 0:
+            mode_text = "알 수 없음"
+            mode_color = "gray"
+        elif self.robot_mode == 1:
+            mode_text = "정상"
+            mode_color = "green"
+        elif self.robot_mode == 2:
+            mode_text = "제한됨"
+            mode_color = "yellow"
+        elif self.robot_mode == 3:
+            mode_text = "보호 정지"
+            mode_color = "red"
+        elif self.robot_mode == 4:
+            mode_text = "복구"
+            mode_color = "yellow"
+        elif self.robot_mode == 5:
+            mode_text = "비상 정지"
+            mode_color = "red"
+        elif self.robot_mode == 6:
+            mode_text = "실행중"
+            mode_color = "green"
+        elif self.robot_mode == 7:
+            mode_text = "스탠바이"
+            mode_color = "green"
+        else:
+            mode_text = f"모드 {self.robot_mode}"
+            mode_color = "gray"
+        
+        # 상태 레이블 업데이트
+        self.robot_mode_label.setText(f"로봇 모드: {mode_text}")
+        self.robot_mode_label.setStyleSheet(f"color: {mode_color}; font-weight: bold;")
+        
+        # 프로그램 실행 상태 텍스트 및 색상 설정
+        if self.program_running:
+            program_text = "실행중"
+            program_color = "green"
+        else:
+            program_text = "정지됨"
+            program_color = "red"
+        
+        # 상태 레이블 업데이트
+        self.program_state_label.setText(f"프로그램 상태: {program_text}")
+        self.program_state_label.setStyleSheet(f"color: {program_color}; font-weight: bold;")
     def update_program_state(self, state):
         """UR 프로그램 상태 업데이트"""
         self.program_state_label.setText(f"프로그램 상태: {state}")
@@ -1061,6 +1187,55 @@ class URControlGUI(QMainWindow):
                 self.log_label.setText(message)
                 self.log_label.setStyleSheet("color: red;")
     
+    def toggle_program_state(self):
+        """프로그램 실행 상태 토글"""
+        try:
+            # 현재 상태에 따라 시작 또는 정지 서비스 호출
+            if self.program_running:
+                # 프로그램 실행 중 -> 정지 요청
+                rospy.loginfo("로봇 프로그램 정지 요청")
+                self.call_robot_service("/ur_hardware_interface/dashboard/stop")
+            else:
+                # 프로그램 정지 중 -> 시작 요청
+                rospy.loginfo("로봇 프로그램 시작 요청")
+                self.call_robot_service("/ur_hardware_interface/dashboard/play")
+                
+        except Exception as e:
+            rospy.logerr(f"프로그램 상태 변경 오류: {e}")
+            QMessageBox.warning(self, "서비스 호출 오류", f"로봇 프로그램 제어 중 오류 발생:\n{str(e)}")
+
+    def call_robot_service(self, service_name):
+        """UR 로봇 대시보드 서비스 호출"""
+        from std_srvs.srv import Trigger
+        
+        try:
+            # 서비스 대기 (짧은 타임아웃 설정)
+            rospy.wait_for_service(service_name, timeout=0.5)
+            
+            # 서비스 프록시 생성
+            service_proxy = rospy.ServiceProxy(service_name, Trigger)
+            
+            # 서비스 호출
+            response = service_proxy()
+            
+            # 응답 처리
+            if response.success:
+                rospy.loginfo(f"서비스 호출 성공: {service_name} - {response.message}")
+                QMessageBox.information(self, "서비스 호출 성공", f"명령이 성공적으로 전송되었습니다.\n{response.message}")
+            else:
+                rospy.logwarn(f"서비스 호출 실패: {service_name} - {response.message}")
+                QMessageBox.warning(self, "서비스 호출 실패", f"로봇이 명령을 거부했습니다.\n{response.message}")
+            
+            return response.success
+            
+        except rospy.ROSException as e:
+            rospy.logerr(f"서비스 호출 타임아웃: {service_name} - {e}")
+            QMessageBox.warning(self, "서비스 연결 실패", f"로봇 서비스에 연결할 수 없습니다.\n서비스가 활성화되어 있는지 확인하세요.")
+            return False
+        except rospy.ServiceException as e:
+            rospy.logerr(f"서비스 호출 오류: {service_name} - {e}")
+            QMessageBox.warning(self, "서비스 오류", f"서비스 호출 중 오류가 발생했습니다.\n{str(e)}")
+            return False
     def handle_object_move(self, x, y, z, rx, ry, rz):
         """물체 감지 탭에서 온 이동 요청 처리"""
         # TCP 입력 필드 업데이트
@@ -1080,6 +1255,12 @@ class URControlGUI(QMainWindow):
 
     def closeEvent(self, event):
         """창이 닫힐 때 호출되는 이벤트 핸들러"""
+        # 로봇 상태 구독 해제 (추가)
+        if hasattr(self, 'program_sub'):
+            self.program_sub.unregister()
+        if hasattr(self, 'mode_sub'):
+            self.mode_sub.unregister()
+        
         # 로봇 컨트롤러 정리
         if hasattr(self, 'robot_controller'):
             try:
@@ -1093,6 +1274,5 @@ class URControlGUI(QMainWindow):
         
         # 이벤트 수락
         event.accept()
-
 
 

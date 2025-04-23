@@ -28,17 +28,14 @@ def init_moveit():
     """Initialize MoveIt"""
     try:
         moveit_commander.roscpp_initialize(sys.argv)
-        rospy.loginfo("MoveIt Commander initialized successfully")
         return True
     except Exception as e:
-        rospy.logerr(f"MoveIt Commander initialization failed: {e}")
+        rospy.logerr(f"MoveIt Commander 초기화 실패: {e}")
         return False
 
 
 def check_gripper_service():
-    """Check if gripper service is available"""
     try:
-        # Wait for service with short timeout
         rospy.wait_for_service('hande_gripper/control', timeout=2.0)
         return True
     except rospy.ROSException:
@@ -46,9 +43,7 @@ def check_gripper_service():
 
 
 def check_camera_topics():
-    """Check if camera topics are available"""
     topics = ['/camera/color/image_raw', '/camera/depth/image_rect_raw']
-    # Wait briefly to allow topic discovery
     rospy.sleep(0.5)
     
     # Get published topics
@@ -56,11 +51,9 @@ def check_camera_topics():
     
     # Check if required topics are available
     missing_topics = [t for t in topics if t not in published_topics]
-    
     if missing_topics:
-        rospy.logwarn(f"Camera topics not found: {', '.join(missing_topics)}")
+        rospy.logwarn(f"카메라 토픽을 찾지 못했습니다. -> {', '.join(missing_topics)}")
         return False
-    
     return True
 
 
@@ -101,7 +94,7 @@ def main():
     
     # Initialize MoveIt
     if not init_moveit():
-        rospy.logerr("MoveIt initialization failed, exiting.")
+        rospy.logerr("MoveIt 초기화에 실패하여 종료합니다.")
         sys.exit(1)
     
     # Process command line arguments
@@ -114,8 +107,8 @@ def main():
         # Show warning dialog
         msg_box = QMessageBox()
         msg_box.setIcon(QMessageBox.Warning)
-        msg_box.setText("Gripper service: '/hande_gripper/control' not found.")
-        msg_box.setInformativeText("Check if hande_driver.py is running. Continue anyway?")
+        msg_box.setText("그리퍼 관련 서비스를 찾지 못했습니다.")
+        msg_box.setInformativeText("그리퍼로부터 응답을 받지 못하고 있습니다. \n 그리퍼 없이 진행하겠습니까?")
         msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         msg_box.setDefaultButton(QMessageBox.Yes)
         
@@ -128,8 +121,8 @@ def main():
         # Show warning dialog
         msg_box = QMessageBox()
         msg_box.setIcon(QMessageBox.Warning)
-        msg_box.setText("Camera topics not found.")
-        msg_box.setInformativeText("Check if the Realsense camera node is running.\nContinue without camera functionality?")
+        msg_box.setText("카메라 관련 토픽을 찾지 못했습니다.")
+        msg_box.setInformativeText("RealSense 카메라 노드를 찾지 못했습니다. \n카메라 없이 진행하겠습니까?")
         msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         msg_box.setDefaultButton(QMessageBox.Yes)
         
@@ -157,7 +150,7 @@ def main():
         sys.exit(app.exec_())
     
     except Exception as e:
-        rospy.logerr(f"Initialization error: {e}")
+        rospy.logerr(f"초기화 오류! : {e}")
         cleanup_resources()
         sys.exit(1)
     

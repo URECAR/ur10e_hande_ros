@@ -184,7 +184,7 @@ class CameraTab(QWidget):
         
         # 물체 감지 파라미터
         self.height_threshold = 0.015  # 평면 위로 튀어나온 물체로 감지할 높이 임계값(m)
-        self.cluster_distance = 0.035  # 클러스터링할 때 최대 거리(m)
+        self.cluster_distance = 0.025  # 클러스터링할 때 최대 거리(m)
         self.min_points = 25  # 클러스터로 인정할 최소 포인트 수
         
         # 영역 박스 시각화 파라미터

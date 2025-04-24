@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- Serial port -->
+  <arg name="port" default="/tmp/ttyUR" />
+  
+  <!-- Start the driver node -->
+  <node name="robotiq_hande_driver_node" pkg="robotiq_hande_ros_driver" type="robotiq_hande_driver_node" output="screen">
+    <param name="port" value="$(arg port)" />
+  </node>
+</launch>

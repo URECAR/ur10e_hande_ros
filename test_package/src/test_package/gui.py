@@ -8,7 +8,7 @@ from std_msgs.msg import Bool, Int8  # 또는 적절한 메시지 타입 (예: U
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                            QLabel, QGroupBox, QGridLayout, QFrame, QPushButton, QLineEdit, 
                            QTabWidget, QSlider, QListWidget, QInputDialog, QMessageBox, QDialog,
-                           QRadioButton, QDialogButtonBox)
+                           QRadioButton, QDialogButtonBox, QStackedWidget)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QSize
 from PyQt5.QtGui import QFont
 from ur_dashboard_msgs.msg import RobotMode 
@@ -127,7 +127,6 @@ class URControlGUI(QMainWindow):
         self.setGeometry(100, 100, 200, 500)
         
         # 기본 폰트 설정
-
         default_font = QFont("NanumGothic", 10)
         self.setFont(default_font)
         
@@ -171,9 +170,28 @@ class URControlGUI(QMainWindow):
         monitoring_group = QGroupBox("로봇 상태 모니터링")
         monitoring_layout = QVBoxLayout()
         
-        # TCP 정보 (3x2 그리드로 표시)
-        tcp_group = QGroupBox("TCP 포즈 (mm, 도)")
-        tcp_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        # 좌표계 토글 버튼 (TCP/Joint 전환)
+        coord_toggle_layout = QHBoxLayout()
+        self.tcp_radio = QRadioButton("TCP 좌표")
+        self.tcp_radio.setChecked(True)  # 기본값은 TCP
+        self.joint_radio = QRadioButton("조인트 좌표")
+        self.tcp_radio.toggled.connect(self.toggle_coordinate_display)
+        self.joint_radio.toggled.connect(self.toggle_coordinate_display)
+        
+        coord_toggle_layout.addWidget(self.tcp_radio)
+        coord_toggle_layout.addWidget(self.joint_radio)
+        coord_toggle_layout.addStretch(1)  # 여백 추가
+        
+        monitoring_layout.addLayout(coord_toggle_layout)
+        
+        # 좌표 표시 영역 (스택 레이아웃 사용)
+        self.coordinates_stack = QStackedWidget()
+        
+        # 1. TCP 정보 (3x2 그리드로 표시)
+        tcp_widget = QWidget()
+        tcp_layout = QVBoxLayout(tcp_widget)
+        tcp_group = QFrame()
+        tcp_group.setFrameShape(QFrame.StyledPanel)
         tcp_grid = QGridLayout()
         
         # TCP 값을 표시할 레이블들 (3x2 그리드)
@@ -197,11 +215,14 @@ class URControlGUI(QMainWindow):
             tcp_grid.addWidget(value_label, row, col + 1)
         
         tcp_group.setLayout(tcp_grid)
-        monitoring_layout.addWidget(tcp_group)
+        tcp_layout.addWidget(tcp_group)
+        self.coordinates_stack.addWidget(tcp_widget)
         
-        # 조인트 값 (3x2 그리드로 표시)
-        joints_group = QGroupBox("조인트 각도 (도)")
-        joints_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        # 2. 조인트 값 (3x2 그리드로 표시)
+        joint_widget = QWidget()
+        joint_layout = QVBoxLayout(joint_widget)
+        joints_group = QFrame()
+        joints_group.setFrameShape(QFrame.StyledPanel)
         joints_grid = QGridLayout()
         
         # 조인트 값을 표시할 레이블들 (3x2 그리드)
@@ -226,7 +247,11 @@ class URControlGUI(QMainWindow):
             joints_grid.addWidget(value_label, row, col + 1)
         
         joints_group.setLayout(joints_grid)
-        monitoring_layout.addWidget(joints_group)
+        joint_layout.addWidget(joints_group)
+        self.coordinates_stack.addWidget(joint_widget)
+        
+        # 스택 위젯을 레이아웃에 추가
+        monitoring_layout.addWidget(self.coordinates_stack)
         
         monitoring_group.setLayout(monitoring_layout)
         robot_layout.addWidget(monitoring_group)
@@ -525,7 +550,6 @@ class URControlGUI(QMainWindow):
         self.log_label = QLabel("시스템 준비 중...")
         self.log_label.setStyleSheet("background-color: #f0f0f0; padding: 5px; border: 1px solid #cccccc;")
         main_layout.addWidget(self.log_label)
-    
 
     def create_pose_tab(self):
         pose_tab = QWidget()
@@ -1271,6 +1295,13 @@ class URControlGUI(QMainWindow):
         else:
             # 다른 탭으로 전환될 때 기본 크기로 복원
             self.resize(self.normal_size)
+
+    def toggle_coordinate_display(self):
+        """TCP와 조인트 좌표 표시 전환"""
+        if self.tcp_radio.isChecked():
+            self.coordinates_stack.setCurrentIndex(0)  # TCP 좌표 표시
+        else:
+            self.coordinates_stack.setCurrentIndex(1)  # 조인트 좌표 표시
 
     def closeEvent(self, event):
         """창이 닫힐 때 호출되는 이벤트 핸들러"""

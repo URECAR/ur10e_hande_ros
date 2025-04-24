@@ -172,12 +172,12 @@ class CameraTab(QWidget):
         
         # 영역 파라미터
         self.region_enabled = False
-        self.x_min = 0.41
-        self.x_max = 0.67
-        self.y_min = -0.10
-        self.y_max = 0.32
+        self.x_min = 0.46
+        self.x_max = 0.63
+        self.y_min = -0.21
+        self.y_max = 0.31
         self.z_min = 0.14
-        self.z_max = 0.30
+        self.z_max = 0.26
         
         # 로봇 제어 관련 변수
         self.robot_controller = None  # 나중에 설정됨

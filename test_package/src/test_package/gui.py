@@ -116,6 +116,20 @@ class URControlGUI(QMainWindow):
         
         # 초기 창 크기 설정
         self.resize(self.normal_size)
+        camera_tab = self.tabs.findChild(CameraTab)  # 탭 위젯에서 CameraTab 타입 찾기
+        if camera_tab:
+            # 현재 로봇 Z 위치 전달
+            current_z = self.current_tcp[2] if hasattr(self, 'current_tcp') and len(self.current_tcp) > 2 else 400.0
+            camera_tab.set_robot_controller(self.robot_controller, current_z)
+            
+            # 물체 감지 탭의 이동 신호 연결
+            camera_tab.move_to_object.connect(self.handle_object_move)
+            rospy.loginfo("카메라 탭과 로봇 컨트롤러 연결 완료")
+        else:
+            rospy.logwarn("카메라 탭을 찾을 수 없음")
+
+        # 탭 변경 이벤트 연결
+        self.tabs.currentChanged.connect(self.on_tab_changed)
     def initial_update(self):
         """GUI 초기화 후 조인트 및 TCP 값을 입력 필드에 설정"""
         self.update_joint_inputs()
@@ -1268,22 +1282,67 @@ class URControlGUI(QMainWindow):
             QMessageBox.warning(self, "서비스 오류", f"서비스 호출 중 오류가 발생했습니다.\n{str(e)}")
             return False
     def handle_object_move(self, x, y, z, rx, ry, rz):
-        """물체 감지 탭에서 온 이동 요청 처리"""
-        # TCP 입력 필드 업데이트
-        self.tcp_inputs[0].setText(f"{x:.2f}")
-        self.tcp_inputs[1].setText(f"{y:.2f}")
-        self.tcp_inputs[2].setText(f"{z:.2f}")
-        self.tcp_inputs[3].setText(f"{rx:.2f}")
-        self.tcp_inputs[4].setText(f"{ry:.2f}")
-        self.tcp_inputs[5].setText(f"{rz:.2f}")
-        
-        # TCP 탭으로 이동
-        self.tabs.setCurrentIndex(0)  # 로봇 제어 탭으로 이동
-        self.control_tabs.setCurrentIndex(1)  # TCP 이동 탭으로 이동
-        
-        # 계획 버튼 클릭
-        self.plan_tcp_movement()
+        """물체 감지 탭에서 온 이동 요청 처리 - 즉시 이동"""
+        try:
+            # TCP 입력 필드 업데이트
+            self.tcp_inputs[0].setText(f"{x:.2f}")
+            self.tcp_inputs[1].setText(f"{y:.2f}")
+            self.tcp_inputs[2].setText(f"{z:.2f}")
+            self.tcp_inputs[3].setText(f"{rx:.2f}")
+            self.tcp_inputs[4].setText(f"{ry:.2f}")
+            self.tcp_inputs[5].setText(f"{rz:.2f}")
+            
+            # TCP 탭으로 이동
+            self.tabs.setCurrentIndex(0)  # 로봇 제어 탭으로 이동
+            self.control_tabs.setCurrentIndex(0)  # TCP 이동 탭으로 이동
+            
+            # 속도 및 가속도 설정 (기본값)
+            velocity_scaling = self.tcp_velocity_slider.value() / 100.0
+            accel_scaling = self.tcp_accel_slider.value() / 100.0
+            
+            # 로봇 이동 계획
+            self.log_label.setText(f"물체 위치로 이동 계획 중... ({x:.2f}, {y:.2f}, {z:.2f})")
+            
+            # TCP 값 가져오기
+            tcp_values = [str(x), str(y), str(z), str(rx), str(ry), str(rz)]
+            
+            # 로봇 이동 계획
+            self.robot_controller.plan_pose_movement(tcp_values, velocity_scaling, accel_scaling)
+            
+            # 물체 위치로 이동 중 메시지
+            self.log_label.setText(f"물체 위치로 이동 중... ({x:.2f}, {y:.2f}, {z:.2f})")
+            
+            # 0.5초 후 자동 실행
+            QTimer.singleShot(500, self.execute_object_move)
+            
+        except Exception as e:
+            rospy.logerr(f"물체 이동 처리 오류: {e}")
+            self.log_label.setText(f"오류: 물체 위치로 이동 실패 - {str(e)}")
+            self.log_label.setStyleSheet("color: red")
 
+    def execute_object_move(self):
+        """물체 위치로 이동 실행"""
+        try:
+            # 계획이 있는지 확인
+            if not self.has_current_plan:
+                self.log_label.setText("물체 위치로 이동 계획 실패")
+                self.log_label.setStyleSheet("color: red")
+                return
+                
+            # 실행
+            success = self.execute_plan()
+            
+            if success:
+                self.log_label.setText("물체 위치로 이동 중...")
+                self.log_label.setStyleSheet("color: green")
+            else:
+                self.log_label.setText("물체 위치로 이동 실행 실패")
+                self.log_label.setStyleSheet("color: red")
+                
+        except Exception as e:
+            rospy.logerr(f"물체 이동 실행 오류: {e}")
+            self.log_label.setText(f"오류: 물체 위치로 이동 실행 실패 - {str(e)}")
+            self.log_label.setStyleSheet("color: red")
     def on_tab_changed(self, index):
         """탭이 변경될 때 호출되는 함수"""
         # 카메라 탭의 인덱스 확인 (일반적으로 마지막 탭)

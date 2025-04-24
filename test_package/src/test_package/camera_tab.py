@@ -185,7 +185,7 @@ class CameraTab(QWidget):
         
         # 물체 감지 파라미터
         self.height_threshold = 0.015  # 평면 위로 튀어나온 물체로 감지할 높이 임계값(m)
-        self.cluster_distance = 0.025  # 클러스터링할 때 최대 거리(m)
+        self.cluster_distance = 0.050  # 클러스터링할 때 최대 거리(m)
         self.min_points = 25  # 클러스터로 인정할 최소 포인트 수
         
         # 영역 박스 시각화 파라미터
@@ -964,7 +964,7 @@ class CameraTab(QWidget):
         self.image_view.setObjects(object_positions)
     
     def on_image_clicked(self, pos):
-        """이미지 클릭 이벤트 처리 - 물체 선택"""
+        """이미지 클릭 이벤트 처리 - 물체 선택하면 즉시 이동"""
         # 강조된 물체가 있는지 확인
         if self.image_view.highlighted_object == -1 or not hasattr(self, 'detected_objects'):
             return
@@ -980,38 +980,115 @@ class CameraTab(QWidget):
             # 로봇을 물체 위치로 이동시키기 위한 파라미터 계산
             x_mm = obj['center'][0] * 1000  # m -> mm
             y_mm = obj['center'][1] * 1000  # m -> mm
+            z_mm = 400.0  # 고정 높이 400mm 설정
             
-            # Z 위치는 현재 로봇의 Z 값 유지
-            # 로봇 컨트롤러가 설정되어 있지 않으면 현재 위치를 알 수 없으므로 기본값 사용
-            if self.robot_controller:
-                # 로봇 컨트롤러에서 현재 TCP Z 좌표 가져오기 (이미 mm 단위)
-                z_mm = self.current_robot_z
-            else:
-                # 기본값 사용 (200mm)
-                z_mm = 200.0
+            # 기본 방향 설정
+            rx, ry, rz = 180.0, 0.0, -90.0
+            
+            rospy.loginfo(f"물체 {obj_idx+1}번 위치로 이동: X={x_mm:.1f}mm, Y={y_mm:.1f}mm, Z={z_mm:.1f}mm")
+            
+            # 로봇 컨트롤러가 있는지 확인
+            if hasattr(self, 'robot_controller') and self.robot_controller:
+                # 직접 MoveGroupCommander를 통해 계획 및 실행
+                move_group = self.robot_controller.move_group
                 
-            # 방향 값은 현재 유지 (로봇 컨트롤러에서 가져오거나 기본값 사용)
-            rx, ry, rz = 180.0, 0.0, 90.0  # 기본값
-            
-            # 로봇 이동 신호 발생
-            self.move_to_object.emit(x_mm, y_mm, z_mm, rx, ry, rz)
-            
-            # 사용자에게 피드백
-            rospy.loginfo(f"물체 {obj_idx+1}번 클릭됨: 위치 ({x_mm:.1f}, {y_mm:.1f}, {z_mm:.1f})")
-            QMessageBox.information(self, "물체 선택됨", 
-                                  f"물체 {obj_idx+1}번 위치로 로봇 이동 계획 중...\n"
-                                  f"위치: X={x_mm:.1f}mm, Y={y_mm:.1f}mm, Z={z_mm:.1f}mm")
+                # 1. 먼저 현재 로봇 상태를 가져옴
+                current_joints = move_group.get_current_joint_values()
+                rospy.loginfo(f"현재 조인트 값: {[round(j, 5) for j in current_joints]}")
+                
+                # 2. 현재 로봇 상태로 시작점 설정 (중요!)
+                move_group.set_start_state_to_current_state()
+                
+                # 3. 목표 포즈 설정
+                from geometry_msgs.msg import Pose
+                target_pose = Pose()
+                
+                # 단위 변환 (mm -> m)
+                target_pose.position.x = x_mm / 1000.0
+                target_pose.position.y = y_mm / 1000.0
+                target_pose.position.z = z_mm / 1000.0
+                
+                # 방향 설정 (쿼터니언)
+                import math
+                from tf.transformations import quaternion_from_euler
+                
+                # 도 -> 라디안 변환
+                rx_rad, ry_rad, rz_rad = math.radians(rx), math.radians(ry), math.radians(rz)
+                quat = quaternion_from_euler(rx_rad, ry_rad, rz_rad)
+                target_pose.orientation.x = quat[0]
+                target_pose.orientation.y = quat[1]
+                target_pose.orientation.z = quat[2]
+                target_pose.orientation.w = quat[3]
+                
+                # 4. 속도 설정
+                move_group.set_max_velocity_scaling_factor(0.25)
+                move_group.set_max_acceleration_scaling_factor(0.25)
+                
+                # 5. 포즈 목표 설정
+                move_group.set_pose_target(target_pose)
+                
+                # 6. 계획 생성 (초기화 설정 후 계획)
+                plan = move_group.plan()
+                
+                # MoveIt 버전에 따라 plan 반환 값이 다를 수 있음
+                if isinstance(plan, tuple):
+                    # ROS Melodic 이상에서는 (success, trajectory_msg) 형식으로 반환
+                    plan_success = plan[0]
+                    trajectory = plan[1]
+                else:
+                    # 이전 버전에서는 trajectory_msg만 반환하며, 비어있지 않으면 성공으로 간주
+                    plan_success = len(plan.joint_trajectory.points) > 0
+                    trajectory = plan
+                
+                if plan_success:
+                    rospy.loginfo("계획 성공! 실행 중...")
+                    # 7. 즉시 실행
+                    move_group.execute(trajectory, wait=True)
+                    rospy.loginfo("실행 완료!")
+                    
+                    # 8. 사용자에게 알림
+                    QMessageBox.information(self, "이동 완료", f"물체 {obj_idx+1}번 위치로 이동 완료")
+                else:
+                    rospy.logerr("계획 실패")
+                    QMessageBox.warning(self, "계획 실패", "로봇 이동 계획 생성에 실패했습니다.")
+                    return
+            else:
+                QMessageBox.warning(self, "오류", "로봇 컨트롤러가 연결되지 않았습니다.")
             
         except Exception as e:
             rospy.logerr(f"물체 클릭 처리 오류: {e}")
+            import traceback
+            rospy.logerr(traceback.format_exc())  # 상세 오류 출력
             QMessageBox.warning(self, "오류", f"물체 위치로 이동 중 오류 발생: {str(e)}")
-    
     def set_robot_controller(self, controller, current_z=None):
-        """로봇 컨트롤러 설정"""
+        """로봇 컨트롤러 설정 및 현재 위치 업데이트"""
         self.robot_controller = controller
         
+        # 현재 로봇의 Z 위치 저장 (카메라 탭에서 물체 클릭 시 사용)
         if current_z is not None:
             self.current_robot_z = current_z
+        else:
+            # 컨트롤러에서 현재 Z 위치 가져오기
+            try:
+                if self.robot_controller:
+                    current_pose = self.robot_controller.move_group.get_current_pose().pose
+                    # 미터 -> 밀리미터 변환
+                    self.current_robot_z = current_pose.position.z * 1000
+                    rospy.loginfo(f"현재 로봇 Z 위치: {self.current_robot_z:.2f}mm")
+                else:
+                    # 기본값 설정
+                    self.current_robot_z = 400.0  # 기본값 400mm
+            except Exception as e:
+                rospy.logwarn(f"현재 Z 위치 가져오기 실패: {e}, 기본값 400mm 사용")
+                self.current_robot_z = 400.0  # 오류 시 기본값
+        
+        # 컨트롤 팁 업데이트
+        if self.robot_controller:
+            self.control_tip.setText("물체를 클릭하면 로봇이 해당 위치로 즉시 이동합니다")
+            self.control_tip.setStyleSheet("color: #008800; font-weight: bold;")
+        else:
+            self.control_tip.setText("로봇 컨트롤러 연결 필요")
+            self.control_tip.setStyleSheet("color: #880000; font-style: italic;")
     
     def closeEvent(self, event):
         """닫기 이벤트 처리"""

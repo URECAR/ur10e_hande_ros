@@ -16,30 +16,33 @@ class PoseManager(QObject):
     pose_list_updated = pyqtSignal(list)  # 포즈 목록이 업데이트되면 발생
     
     def __init__(self, config_dir=None):
-	    super().__init__()
-	    
-	    # 설정 파일 경로 설정
-	    if config_dir is None:
-	        # ROS 패키지 경로 사용
-	        package_path = os.path.expanduser('~/.ros/ur_poses')
-	        if not os.path.exists(package_path):
-	            os.makedirs(package_path)
-	        self.config_dir = package_path
-	    else:
-	        self.config_dir = config_dir
-	    
-	    self.config_file = os.path.join(self.config_dir, 'poses.json')
-	    
-	    # 포즈 저장소
-	    self.poses = {}
-	    
-	    # 설정 파일 로드
-	    self.load_poses()
-	    
-	    # 로드 후 명시적으로 신호 발생
-	    self.pose_list_updated.emit(list(self.poses.keys()))
-	    
-	    rospy.loginfo(f"포즈 관리자 초기화 완료: {len(self.poses)} 포즈 로드됨")   
+        super().__init__()
+        
+        # 설정 파일 경로 설정
+        if config_dir is None:
+            # 현재 실행 중인 스크립트 위치 기준으로 패키지 경로 찾기
+            import os
+            script_dir = os.path.dirname(os.path.abspath(__file__))  # 현재 스크립트 경로
+            package_dir = os.path.dirname(os.path.dirname(script_dir))  # 패키지 루트 경로
+            self.config_dir = os.path.join(package_dir, 'config')
+            # config 디렉토리가 없으면 생성
+            if not os.path.exists(self.config_dir):
+                os.makedirs(self.config_dir)
+        else:
+            self.config_dir = config_dir
+        
+        self.config_file = os.path.join(self.config_dir, 'poses.json')
+        
+        # 포즈 저장소
+        self.poses = {}
+        
+        # 설정 파일 로드
+        self.load_poses()
+        
+        # 로드 후 명시적으로 신호 발생
+        self.pose_list_updated.emit(list(self.poses.keys()))
+        
+        rospy.loginfo(f"포즈 관리자 초기화 완료: {self.config_file}, {len(self.poses)} 포즈 로드됨")
     def load_poses(self):
         """설정 파일에서 포즈 로드"""
         try:

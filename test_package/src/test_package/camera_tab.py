@@ -13,7 +13,7 @@ import tf2_ros
 import tf2_geometry_msgs
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                            QGroupBox, QGridLayout, QPushButton, QFrame, QLineEdit,
-                           QCheckBox, QDoubleSpinBox, QColorDialog, QSpinBox, QMessageBox)
+                           QCheckBox, QDoubleSpinBox, QColorDialog, QSpinBox, QMessageBox, QSizePolicy)
 from PyQt5.QtGui import QImage, QPixmap, QColor, QPainter, QPen, QFont
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QPoint, QSize, QRect
 import sensor_msgs.point_cloud2 as pc2
@@ -28,7 +28,8 @@ class ImageDisplayWidget(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAlignment(Qt.AlignCenter)
-        self.setFixedSize(640, 480)  # 이미지 크기 고정
+        self.setMinimumSize(320, 240)  # 최소 크기 설정
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)  # 크기 정책 변경
         self.setStyleSheet("background-color: black;")
         self.setMouseTracking(True)  # 마우스 움직임 추적 활성화
         self.setCursor(Qt.CrossCursor)  # 십자형 커서로 변경
@@ -216,7 +217,7 @@ class CameraTab(QWidget):
         self.marker_timer.timeout.connect(self.publish_region_box_marker)
         self.marker_timer.start(500)  # 2Hz로 마커 업데이트
         
-        rospy.loginfo("카메라 탭 초기화 완료 - 물체 감지 기능 추가")
+        rospy.loginfo("카메라 탭 초기화 완료")
     
     def init_ui(self):
         """UI 초기화"""
@@ -301,11 +302,6 @@ class CameraTab(QWidget):
         self.visualize_checkbox.toggled.connect(self.toggle_visualization)
         checkbox_layout.addWidget(self.visualize_checkbox)
         
-        # 색상 버튼 추가
-        self.color_button = QPushButton("색상 변경")
-        self.color_button.clicked.connect(self.change_marker_color)
-        self.color_button.setStyleSheet(f"background-color: rgba({int(self.marker_color[0]*255)}, {int(self.marker_color[1]*255)}, {int(self.marker_color[2]*255)}, {int(self.marker_color[3]*255)})")
-        checkbox_layout.addWidget(self.color_button)
         
         region_layout.addLayout(checkbox_layout, 0, 0, 1, 4)
         
@@ -489,31 +485,7 @@ class CameraTab(QWidget):
             # 시각화 비활성화 시 마커 제거
             self.publish_region_box_marker(delete=True)
     
-    def change_marker_color(self):
-        """마커 색상 변경"""
-        current_color = QColor(
-            int(self.marker_color[0] * 255),
-            int(self.marker_color[1] * 255),
-            int(self.marker_color[2] * 255),
-            int(self.marker_color[3] * 255)
-        )
-        
-        color = QColorDialog.getColor(current_color, self, "영역 박스 색상 선택", QColorDialog.ShowAlphaChannel)
-        
-        if color.isValid():
-            self.marker_color = [
-                color.red() / 255.0,
-                color.green() / 255.0,
-                color.blue() / 255.0,
-                color.alpha() / 255.0
-            ]
-            
-            # 색상 버튼 배경색 업데이트
-            self.color_button.setStyleSheet(f"background-color: rgba({color.red()}, {color.green()}, {color.blue()}, {color.alpha()})")
-            
-            # 마커 색상 업데이트
-            if self.visualize_region and self.region_enabled:
-                self.publish_region_box_marker()
+
     
     def get_region_range_text(self):
         """현재 영역 범위 텍스트 생성"""

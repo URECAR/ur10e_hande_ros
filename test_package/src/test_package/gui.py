@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                            QLabel, QGroupBox, QGridLayout, QFrame, QPushButton, QLineEdit, 
                            QTabWidget, QSlider, QListWidget, QInputDialog, QMessageBox, QDialog,
                            QRadioButton, QDialogButtonBox)
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QSize
 from PyQt5.QtGui import QFont
 from ur_dashboard_msgs.msg import RobotMode 
 
@@ -88,7 +88,7 @@ class URControlGUI(QMainWindow):
         self.log_label.setText("시스템 준비 완료.")
         
         # 시작 시 좌표 업데이트 타이머 (1회 실행)
-        QTimer.singleShot(2000, self.initial_update)
+        QTimer.singleShot(500, self.initial_update)
         
         # 포즈 목록 로딩 연결 (포즈 관리자 초기화 후 목록 로딩)
         self.pose_manager.pose_list_updated.connect(self.update_pose_list)
@@ -108,7 +108,14 @@ class URControlGUI(QMainWindow):
             
             # 물체 감지 탭의 이동 신호 연결
             camera_tab.move_to_object.connect(self.handle_object_move)
-
+        self.tabs.currentChanged.connect(self.on_tab_changed)
+            
+        # 창 크기 관련 속성 추가
+        self.normal_size = QSize(400, 640)  # 기본 탭에서 사용할 크기
+        self.camera_size = QSize(400, 640)  # 카메라 탭에서 사용할 크기
+        
+        # 초기 창 크기 설정
+        self.resize(self.normal_size)
     def initial_update(self):
         """GUI 초기화 후 조인트 및 TCP 값을 입력 필드에 설정"""
         self.update_joint_inputs()
@@ -1252,6 +1259,18 @@ class URControlGUI(QMainWindow):
         
         # 계획 버튼 클릭
         self.plan_tcp_movement()
+
+    def on_tab_changed(self, index):
+        """탭이 변경될 때 호출되는 함수"""
+        # 카메라 탭의 인덱스 확인 (일반적으로 마지막 탭)
+        camera_tab_index = self.tabs.count() - 1
+        
+        if index == camera_tab_index:
+            # 카메라 탭으로 전환될 때 창 크기 확장
+            self.resize(self.camera_size)
+        else:
+            # 다른 탭으로 전환될 때 기본 크기로 복원
+            self.resize(self.normal_size)
 
     def closeEvent(self, event):
         """창이 닫힐 때 호출되는 이벤트 핸들러"""

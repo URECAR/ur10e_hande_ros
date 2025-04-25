@@ -4,228 +4,270 @@
 import sys
 import rospy
 import time
-import serial
-import binascii
 import threading
-import struct
+import socket
+from enum import Enum
+from collections import OrderedDict
 from std_msgs.msg import Float64, Bool, UInt8
 from sensor_msgs.msg import JointState
 from hande_bringup.srv import GripperControl, GripperControlResponse
+from hande_bringup.msg import HandEGripperCommand, HandEGripperStatus
 
-class ModbusRTU:
-    """Modbus RTU 통신 헬퍼 클래스"""
+class RobotiqHandEDriver:
+    """Robotiq Hand-E 그리퍼 드라이버 (소켓 통신 방식)"""
     
-    @staticmethod
-    def calculate_crc(data):
-        """Modbus CRC-16 계산"""
-        crc = 0xFFFF
-        
-        for byte in data:
-            crc ^= byte
-            for _ in range(8):
-                if crc & 0x0001:
-                    crc = (crc >> 1) ^ 0xA001
-                else:
-                    crc = crc >> 1
-        
-        # CRC를 리틀 엔디안으로 반환
-        return crc.to_bytes(2, byteorder='little')
-    
-    @staticmethod
-    def create_command(slave_id, function_code, address, data=None, count=None):
-        """Modbus 명령 생성"""
-        cmd = bytearray([slave_id, function_code])
-        
-        # 주소 추가 (빅 엔디안)
-        cmd.extend(address.to_bytes(2, byteorder='big'))
-        
-        if function_code == 0x03:  # 읽기 명령
-            # 레지스터 개수 추가 (빅 엔디안)
-            cmd.extend(count.to_bytes(2, byteorder='big'))
-        elif function_code == 0x10:  # 쓰기 명령
-            # 레지스터 개수 추가 (빅 엔디안)
-            cmd.extend(count.to_bytes(2, byteorder='big'))
-            # 바이트 개수 추가
-            cmd.append(len(data))
-            # 데이터 추가
-            cmd.extend(data)
-        
-        # CRC 추가
-        cmd.extend(ModbusRTU.calculate_crc(cmd))
-        
-        return cmd
-    
-    @staticmethod
-    def parse_response(response, function_code):
-        """Modbus 응답 파싱"""
-        if len(response) < 5:  # 최소 길이 확인
-            return None
-        
-        # 헤더 확인 (slave ID, function code)
-        if response[0] != 0x09 or response[1] != function_code:
-            return None
-        
-        # CRC 확인
-        received_crc = response[-2:]
-        calculated_crc = ModbusRTU.calculate_crc(response[:-2])
-        
-        if received_crc != calculated_crc:
-            return None
-        
-        # 데이터 부분 반환
-        if function_code == 0x03:  # 읽기 응답
-            byte_count = response[2]
-            data = response[3:-2]
-            return data
-        elif function_code == 0x10:  # 쓰기 응답
-            return True
-        
-        return None
+    # WRITE VARIABLES (요청 변수)
+    ACT = 'ACT'  # 활성화 (1 = 활성화됨)
+    GTO = 'GTO'  # 이동 명령
+    ATR = 'ATR'  # 자동 해제
+    ADR = 'ADR'  # 자동 해제 방향
+    FOR = 'FOR'  # 힘 (0-255)
+    SPE = 'SPE'  # 속도 (0-255)
+    POS = 'POS'  # 위치 (0-255)
 
+    # READ VARIABLES (응답 변수)
+    STA = 'STA'  # 상태
+    PRE = 'PRE'  # 위치 에코
+    OBJ = 'OBJ'  # 물체 감지
+    FLT = 'FLT'  # 폴트
 
-class RobotiqHandEGripper:
-    """Robotiq Hand-E 그리퍼 컨트롤러"""
+    # 소켓 통신 인코딩
+    ENCODING = 'UTF-8'
+
+    # 그리퍼 상태 열거형
+    class GripperStatus(Enum):
+        RESET = 0
+        ACTIVATING = 1
+        ACTIVE = 3
+
+    # 물체 감지 상태 열거형
+    class ObjectStatus(Enum):
+        MOVING = 0
+        STOPPED_OUTER_OBJECT = 1  # 외부 물체와 접촉
+        STOPPED_INNER_OBJECT = 2  # 내부 물체와 접촉
+        AT_DEST = 3               # 목표 지점에 도달
     
-    # 상수 정의
-    SLAVE_ID = 0x09
-    
-    # 레지스터 주소
-    REG_STATUS = 0x07D0  # 상태 레지스터 시작 주소
-    REG_COMMAND = 0x03E8  # 명령 레지스터 시작 주소
-    
-    # 상태 비트 마스크
-    MASK_gACT = 0x01      # 활성화 상태
-    MASK_gGTO = 0x02      # 이동 중 상태
-    MASK_gSTA = 0x0C      # 그리퍼 상태 (2비트)
-    MASK_gOBJ = 0x30      # 물체 감지 상태 (2비트)
-    MASK_gFLT = 0xC0      # 폴트 상태 (2비트)
-    
-    # 명령 비트 마스크
-    MASK_rACT = 0x01      # 활성화 명령
-    MASK_rGTO = 0x02      # 이동 명령
-    MASK_rATR = 0x04      # 자동 해제
-    MASK_rARD = 0x08      # 자동 해제 방향
-    
-    # 물체 감지 상태 값
-    OBJ_MOVING = 0x00     # 이동 중
-    OBJ_DETECTED = 0x01   # 물체 감지됨
-    OBJ_MAX_OPEN = 0x02   # 최대 열림
-    OBJ_MAX_CLOSE = 0x03  # 최대 닫힘
-    
-    def __init__(self, port='/dev/ttyUSB0', baudrate=115200):
-        self.port = port
-        self.baudrate = baudrate
-        self.serial = None
+    def __init__(self, host='localhost', port=63352):
+        """생성자"""
+        # 소켓 통신 관련 변수
+        self.socket = None
+        self.command_lock = threading.Lock()
         self.connected = False
-        self.lock = threading.Lock()  # 시리얼 통신 동기화를 위한 락
+        self.host = host
+        self.port = port
         
-        # 상태 변수
+        # 그리퍼 범위 설정
+        self._min_position = 0
+        self._max_position = 255
+        self._min_speed = 0
+        self._max_speed = 255
+        self._min_force = 0
+        self._max_force = 255
+        
+        # 그리퍼 상태 변수
         self.activated = False
         self.moving = False
         self.obj_status = 0
         self.fault_status = 0
         self.position = 0
         self.current = 0
-        
-        # 명령 변수
         self.target_position = 0
         self.speed = 255
         self.force = 255
     
     def connect(self):
-        """시리얼 포트 연결 및 그리퍼 초기화 설정"""
+        """소켓 연결 설정"""
         try:
-            self.serial = serial.Serial(
-                port=self.port,
-                baudrate=self.baudrate,
-                timeout=0.5,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE,
-                bytesize=serial.EIGHTBITS
-            )
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.connect((self.host, self.port))
+            self.socket.settimeout(2.0)
+            self.connected = True
             
-            if self.serial.is_open:
-                rospy.loginfo(f"그리퍼와 연결 성공: {self.port}")
-                self.connected = True
-                
-                # 먼저 활성화 상태 확인
-                status = self.get_status()
-                
-                if status and status.get('activated', False):
-                    rospy.loginfo("그리퍼가 이미 활성화되어 있습니다.")
-                    self.activated = True
-                    return True
-                
-                # 그리퍼 활성화 명령 전송
-                rospy.loginfo("그리퍼 활성화 시작...")
-                if self.activate_gripper():
-                    rospy.loginfo("그리퍼 활성화 성공")
-                    self.activated = True
-                    return True
-                else:
-                    rospy.logerr("그리퍼 활성화 실패")
-                    return False
-            else:
-                rospy.logerr(f"시리얼 포트 열기 실패: {self.port}")
-                return False
-        except Exception as e:
+            # 초기 상태 확인
+            rospy.loginfo(f"그리퍼와 연결 성공: {self.host}:{self.port}")
+            return True
+        except socket.error as e:
             rospy.logerr(f"그리퍼 연결 오류: {e}")
+            self.connected = False
             return False
     
-    def close_connection(self):
+    def disconnect(self):
         """연결 종료"""
-        if self.serial and self.connected:
+        if self.socket:
             try:
-                self.serial.close()
+                self.socket.close()
+                self.connected = False
             except:
                 pass
-            self.connected = False
+    
+    def _set_vars(self, var_dict):
+        """여러 변수 설정 및 응답 대기"""
+        if not self.connected:
+            return False
+            
+        cmd = 'SET'
+        for variable, value in var_dict.items():
+            cmd += f' {variable} {value}'
+        cmd += '\n'
+        
+        try:
+            with self.command_lock:
+                self.socket.sendall(cmd.encode(self.ENCODING))
+                data = self.socket.recv(1024)
+            return self._is_ack(data)
+        except socket.error as e:
+            rospy.logerr(f"그리퍼 명령 전송 오류: {e}")
+            return False
+    
+    def _set_var(self, variable, value):
+        """단일 변수 설정"""
+        return self._set_vars(OrderedDict([(variable, value)]))
+    
+    def _get_var(self, variable):
+        """변수 값 가져오기"""
+        if not self.connected:
+            return 0
+            
+        try:
+            with self.command_lock:
+                self.socket.sendall(f"GET {variable}\n".encode(self.ENCODING))
+                data = self.socket.recv(1024)
+            
+            response = data.decode(self.ENCODING).strip()
+            var_name, value_str = response.split()
+            if var_name != variable:
+                rospy.logwarn(f"예상치 못한 응답: {response}")
+                return 0
+            return int(value_str)
+        except (socket.error, ValueError) as e:
+            rospy.logerr(f"그리퍼 상태 읽기 오류: {e}")
+            return 0
+    
+    @staticmethod
+    def _is_ack(data):
+        """응답이 ack인지 확인"""
+        try:
+            return data.strip().lower() == b'ack'
+        except:
+            return False
+    
+    def _reset(self):
+        """그리퍼 리셋 (폴트 해제)"""
+        rospy.loginfo("그리퍼 리셋 시작...")
+        
+        # ACT와 ATR 비트를 0으로 설정해 비활성화
+        self._set_var(self.ACT, 0)
+        self._set_var(self.ATR, 0)
+        
+        # 비활성화 완료될 때까지 대기
+        retry_count = 0
+        while (self._get_var(self.ACT) != 0 or self._get_var(self.STA) != 0) and retry_count < 5:
+            self._set_var(self.ACT, 0)
+            self._set_var(self.ATR, 0)
+            time.sleep(0.1)
+            retry_count += 1
+        
+        time.sleep(0.5)
+        rospy.loginfo("그리퍼 리셋 완료")
     
     def activate_gripper(self):
         """그리퍼 활성화"""
         if not self.connected:
+            rospy.logwarn("활성화 실패: 그리퍼 연결되지 않음")
+            return False
+        
+        if self.is_active():
+            rospy.loginfo("그리퍼가 이미 활성화되어 있습니다")
+            self.activated = True
+            return True
+        
+        # 그리퍼 리셋
+        self._reset()
+        
+        # 활성화 명령 전송
+        rospy.loginfo("그리퍼 활성화 중...")
+        self._set_var(self.ACT, 1)
+        
+        # 활성화 대기
+        time.sleep(1.0)
+        retry_count = 0
+        while (self._get_var(self.ACT) != 1 or self._get_var(self.STA) != 3) and retry_count < 5:
+            time.sleep(0.2)
+            retry_count += 1
+        
+        # 활성화 상태 확인
+        self.activated = self.is_active()
+        if self.activated:
+            rospy.loginfo("그리퍼 활성화 성공")
+        else:
+            rospy.logerr("그리퍼 활성화 실패")
+        
+        return self.activated
+    
+    def is_active(self):
+        """그리퍼가 활성화되어 있는지 확인"""
+        if not self.connected:
+            return False
+        try:
+            sta_value = self._get_var(self.STA)
+            return RobotiqHandEDriver.GripperStatus(sta_value) == RobotiqHandEDriver.GripperStatus.ACTIVE
+        except:
+            return False
+    
+    def get_current_position(self):
+        """현재 위치 가져오기"""
+        if not self.connected:
+            return self.position  # 현재 저장된 위치 반환
+        try:
+            self.position = self._get_var(self.POS)
+            return self.position
+        except:
+            return self.position
+    
+    def auto_calibrate(self):
+        """개방/폐쇄 위치 자동 보정"""
+        if not self.is_active():
+            rospy.logwarn("보정 실패: 그리퍼가 활성화되지 않음")
             return False
         
         try:
-            with self.lock:
-                # 활성화 명령 생성 (rACT=1, 나머지 0)
-                data = bytearray([1, 0, 0, 0, 0, 0])
-                cmd = ModbusRTU.create_command(
-                    self.SLAVE_ID, 0x10, self.REG_COMMAND, data, 3)
-                
-                self.serial.write(cmd)
-                response = self.serial.read(8)  # 응답은 8바이트
-                
-                if len(response) != 8:
-                    rospy.logerr(f"활성화 응답 오류: 응답이 8바이트가 아님 ({len(response)}바이트)")
-                    return False
-                
-                # 제대로 된 응답인지 확인
-                if response[0] == self.SLAVE_ID and response[1] == 0x10:
-                    rospy.loginfo("활성화 명령 전송 성공")
-                    
-                    # 활성화 상태 확인을 위해 1초 대기
-                    time.sleep(1)
-                    
-                    # 상태 확인
-                    status = self.get_status()
-                    self.activated = status and status.get('activated', False)
-                    
-                    return self.activated
-                else:
-                    rospy.logerr(f"활성화 응답 오류: 예상치 못한 응답 {binascii.hexlify(response)}")
-                    return False
-                
+            # 완전 열기
+            rospy.loginfo("그리퍼 보정 중: 열기...")
+            pos, stat = self.move_and_wait_for_pos(self._min_position, 64, 1)
+            if RobotiqHandEDriver.ObjectStatus(stat) != RobotiqHandEDriver.ObjectStatus.AT_DEST:
+                rospy.logerr(f"열기 보정 실패: {stat}")
+                return False
+            
+            # 완전 닫기
+            rospy.loginfo("그리퍼 보정 중: 닫기...")
+            pos, stat = self.move_and_wait_for_pos(self._max_position, 64, 1)
+            if RobotiqHandEDriver.ObjectStatus(stat) != RobotiqHandEDriver.ObjectStatus.AT_DEST:
+                rospy.logerr(f"닫기 보정 실패: {stat}")
+                return False
+            self._max_position = pos
+            
+            # 다시 열기
+            rospy.loginfo("그리퍼 보정 중: 다시 열기...")
+            pos, stat = self.move_and_wait_for_pos(self._min_position, 64, 1)
+            if RobotiqHandEDriver.ObjectStatus(stat) != RobotiqHandEDriver.ObjectStatus.AT_DEST:
+                rospy.logerr(f"재열기 보정 실패: {stat}")
+                return False
+            self._min_position = pos
+            
+            rospy.loginfo(f"그리퍼 보정 완료: 위치 범위 [{self._min_position}, {self._max_position}]")
+            return True
+            
         except Exception as e:
-            rospy.logerr(f"그리퍼 활성화 오류: {e}")
+            rospy.logerr(f"보정 중 오류 발생: {e}")
             return False
     
     def send_command(self, position, speed=None, force=None):
-        """그리퍼에 이동 명령 전송"""
+        """그리퍼 위치 명령 전송"""
         if not self.connected or not self.activated:
+            rospy.logwarn("명령 전송 실패: 그리퍼가 연결되지 않았거나 활성화되지 않음")
             return False
         
-        # 속도와 힘 값이 지정되지 않았으면 이전 값 사용
+        # 속도와 힘을 지정하지 않은 경우 저장된 값 사용
         if speed is not None:
             self.speed = speed
         if force is not None:
@@ -234,174 +276,147 @@ class RobotiqHandEGripper:
         # 목표 위치 저장
         self.target_position = position
         
-        try:
-            with self.lock:
-                # 명령 생성 (rACT=1, rGTO=1)
-                cmd_byte = 0x09  # rACT=1, rGTO=1
-                position_byte = position & 0xFF
-                speed_byte = self.speed & 0xFF
-                force_byte = self.force & 0xFF
-                
-                data = bytearray([cmd_byte, 0, 0, position_byte, speed_byte, force_byte])
-                cmd = ModbusRTU.create_command(
-                    self.SLAVE_ID, 0x10, self.REG_COMMAND, data, 3)
-                
-                self.serial.write(cmd)
-                response = self.serial.read(8)  # 응답은 8바이트
-                
-                if len(response) != 8:
-                    rospy.logerr(f"명령 응답 오류: 응답이 8바이트가 아님 ({len(response)}바이트)")
-                    return False
-                
-                # 제대로 된 응답인지 확인
-                if response[0] == self.SLAVE_ID and response[1] == 0x10:
-                    rospy.loginfo(f"이동 명령 전송 성공: 위치={position}, 속도={self.speed}, 힘={self.force}")
-                    return True
-                else:
-                    rospy.logerr(f"명령 응답 오류: 예상치 못한 응답 {binascii.hexlify(response)}")
-                    return False
-                
-        except Exception as e:
-            rospy.logerr(f"그리퍼 명령 전송 오류: {e}")
-            return False
+        # 위치 명령 전송
+        success, clip_pos = self.move(position, self.speed, self.force)
+        
+        if success:
+            rospy.loginfo(f"위치 명령 전송 성공: {position}, 속도: {self.speed}, 힘: {self.force}")
+            self.moving = True
+        else:
+            rospy.logerr("위치 명령 전송 실패")
+        
+        return success
+    
+    def move(self, position, speed, force):
+        """비차단 이동 명령 전송"""
+        def clip_val(min_val, val, max_val):
+            return max(min_val, min(val, max_val))
+        
+        # 입력값 범위 제한
+        clip_pos = clip_val(self._min_position, position, self._max_position)
+        clip_spe = clip_val(self._min_speed, speed, self._max_speed)
+        clip_for = clip_val(self._min_force, force, self._max_force)
+        
+        # 명령 변수 설정
+        var_dict = OrderedDict([
+            (self.POS, clip_pos),
+            (self.SPE, clip_spe),
+            (self.FOR, clip_for),
+            (self.GTO, 1)
+        ])
+        
+        # 명령 전송
+        success = self._set_vars(var_dict)
+        return success, clip_pos
+    
+    def move_and_wait_for_pos(self, position, speed, force):
+        """이동 완료까지 대기하는 차단 이동 명령"""
+        success, clip_pos = self.move(position, speed, force)
+        if not success:
+            rospy.logerr('이동 명령 전송 실패')
+            return position, 0
+        
+        # 목표 위치 도달 대기
+        timeout = 5.0  # 최대 대기 시간(초)
+        start_time = time.time()
+        
+        # 우선 PRE(위치 에코)가 명령 위치와 일치할 때까지 대기
+        while self._get_var(self.PRE) != clip_pos:
+            if time.time() - start_time > timeout:
+                rospy.logwarn("이동 타임아웃: 위치 에코 대기 중")
+                break
+            time.sleep(0.01)
+        
+        # 이제 이동이 완료될 때까지 대기
+        status = self._get_var(self.OBJ)
+        while RobotiqHandEDriver.ObjectStatus(status) == RobotiqHandEDriver.ObjectStatus.MOVING:
+            if time.time() - start_time > timeout:
+                rospy.logwarn("이동 타임아웃: 이동 완료 대기 중")
+                break
+            status = self._get_var(self.OBJ)
+            time.sleep(0.01)
+        
+        # 최종 위치와 상태 반환
+        final_pos = self._get_var(self.POS)
+        return final_pos, status
     
     def open_gripper(self):
         """그리퍼 완전히 열기"""
-        return self.send_command(0)  # 0 = 완전 열림
+        rospy.loginfo("그리퍼 열기 시작")
+        return self.send_command(0, self.speed, self.force)
     
     def close_gripper(self):
         """그리퍼 완전히 닫기"""
-        return self.send_command(255)  # 255 = 완전 닫힘
+        rospy.loginfo("그리퍼 닫기 시작")
+        return self.send_command(255, self.speed, self.force)
     
     def reset_gripper(self):
-        """그리퍼 초기화/리셋 - Modbus RTU 프로토콜 직접 사용
-        
-        Returns:
-            bool: 초기화 성공 여부
-        """
+        """그리퍼 초기화/리셋"""
         if not self.connected:
+            rospy.logwarn("리셋 실패: 그리퍼가 연결되지 않음")
             return False
         
         try:
-            with self.lock:
-                # 1단계: 비활성화 명령 (rACT=0)
-                # 명령 데이터: 비활성화를 위한 모든 비트를 0으로 설정
-                deactivate_data = bytearray([0, 0, 0, 0, 0, 0])
-                deactivate_cmd = ModbusRTU.create_command(
-                    self.SLAVE_ID, 0x10, self.REG_COMMAND, deactivate_data, 3)
+            # 리셋 수행
+            self._reset()
+            
+            # 다시 활성화
+            success = self.activate_gripper()
+            
+            if success:
+                rospy.loginfo("그리퍼 초기화 및 재활성화 성공")
+            else:
+                rospy.logerr("그리퍼 재활성화 실패")
                 
-                rospy.loginfo("그리퍼 비활성화 명령 전송...")
-                self.serial.write(deactivate_cmd)
-                response = self.serial.read(8)  # 응답은 8바이트
-                
-                # 응답 확인
-                if len(response) != 8 or response[0] != self.SLAVE_ID or response[1] != 0x10:
-                    rospy.logerr("비활성화 응답 오류")
-                    return False
-                
-                # 잠시 대기
-                time.sleep(0.5)
-                
-                # 2단계: 활성화 명령 (rACT=1)
-                # 문서에 나온 정확한 명령 사용: 09 10 03 E8 00 03 06 01 00 00 00 00 00 (+ CRC)
-                # 명령 데이터: 첫 바이트만 1(rACT), 나머지 0
-                activate_data = bytearray([1, 0, 0, 0, 0, 0])
-                activate_cmd = ModbusRTU.create_command(
-                    self.SLAVE_ID, 0x10, self.REG_COMMAND, activate_data, 3)
-                
-                rospy.loginfo("그리퍼 활성화 명령 전송...")
-                self.serial.write(activate_cmd)
-                response = self.serial.read(8)  # 응답은 8바이트
-                
-                # 응답 확인
-                if len(response) != 8 or response[0] != self.SLAVE_ID or response[1] != 0x10:
-                    rospy.logerr("활성화 응답 오류")
-                    return False
-                
-                # 상태 확인 기다림
-                time.sleep(1.0)
-                status = self.get_status()
-                
-                if status and status.get('activated', False):
-                    rospy.loginfo("그리퍼 초기화 성공")
-                    self.activated = True
-                    return True
-                else:
-                    rospy.logerr("그리퍼 초기화 후 활성화 상태 확인 실패")
-                    return False
-                    
+            return success
         except Exception as e:
-            rospy.logerr(f"그리퍼 초기화 중 오류 발생: {str(e)}")
+            rospy.logerr(f"그리퍼 리셋 중 오류 발생: {e}")
             return False
     
     def get_status(self):
         """그리퍼 상태 읽기"""
         if not self.connected:
+            rospy.logwarn("상태 읽기 실패: 그리퍼가 연결되지 않음")
             return None
         
         try:
-            with self.lock:
-                # 상태 읽기 명령 생성
-                cmd = ModbusRTU.create_command(
-                    self.SLAVE_ID, 0x03, self.REG_STATUS, count=3)
-                
-                self.serial.write(cmd)
-                response = self.serial.read(11)  # 응답은 11바이트
-                
-                if len(response) != 11:
-                    rospy.logwarn(f"상태 응답 오류: 응답이 11바이트가 아님 ({len(response)}바이트)")
-                    return None
-                
-                # 응답 파싱
-                if response[0] == self.SLAVE_ID and response[1] == 0x03 and response[2] == 0x06:
-                    # 상태 바이트
-                    status_byte = response[3]
-                    
-                    # 위치 값 (0-255)
-                    position = response[7]
-                    
-                    # 전류 값
-                    current = response[9]
-                    
-                    # 상태 비트 해석
-                    activated = bool(status_byte & self.MASK_gACT)
-                    moving = bool(status_byte & self.MASK_gGTO)
-                    
-                    # 물체 감지 상태 (2비트)
-                    obj_status = (status_byte & self.MASK_gOBJ) >> 4
-                    
-                    # 폴트 상태 (2비트)
-                    fault_status = (status_byte & self.MASK_gFLT) >> 6
-                    
-                    # 물체 감지 여부
-                    object_detected = (obj_status == self.OBJ_DETECTED)
-                    
-                    # 상태 변수 업데이트
-                    self.activated = activated
-                    self.moving = moving
-                    self.obj_status = obj_status
-                    self.fault_status = fault_status
-                    self.position = position
-                    self.current = current
-                    
-                    # 상태 정보 딕셔너리 반환
-                    return {
-                        'activated': activated,
-                        'moving': moving,
-                        'obj_status': obj_status,
-                        'object_detected': object_detected,
-                        'fault_status': fault_status,
-                        'position': position,
-                        'current': current
-                    }
-                else:
-                    rospy.logwarn(f"상태 응답 오류: 예상치 못한 응답 {binascii.hexlify(response)}")
-                    return None
-                
-        except Exception as e:
-            rospy.logwarn(f"그리퍼 상태 읽기 오류: {e}")
-            return None
+            # 상태 변수 읽기
+            sta_value = self._get_var(self.STA)
+            pos_value = self._get_var(self.POS)
+            obj_value = self._get_var(self.OBJ)
+            flt_value = self._get_var(self.FLT)
+            pre_value = self._get_var(self.PRE)
             
+            # 상태 파싱
+            self.activated = (sta_value == RobotiqHandEDriver.GripperStatus.ACTIVE.value)
+            self.position = pos_value
+            self.obj_status = obj_value
+            self.fault_status = flt_value
+            
+            # 물체 감지 상태 확인
+            object_detected = (obj_value == RobotiqHandEDriver.ObjectStatus.STOPPED_OUTER_OBJECT.value or 
+                               obj_value == RobotiqHandEDriver.ObjectStatus.STOPPED_INNER_OBJECT.value)
+            
+            # 이동 상태 확인 (PRE != POS 또는 OBJ == MOVING)
+            self.moving = (pre_value != pos_value or obj_value == RobotiqHandEDriver.ObjectStatus.MOVING.value)
+            
+            # 상태 정보 반환
+            status = {
+                'activated': self.activated,
+                'moving': self.moving,
+                'obj_status': obj_value,
+                'object_detected': object_detected,
+                'fault_status': flt_value,
+                'position': pos_value,
+                'current': 0  # 현재 전류 정보는 없음
+            }
+            
+            return status
+            
+        except Exception as e:
+            rospy.logerr(f"상태 읽기 중 오류 발생: {e}")
+            return None
+
 
 class HandEGripperDriver:
     """Hand-E 그리퍼 ROS 드라이버 노드"""
@@ -411,21 +426,34 @@ class HandEGripperDriver:
         if not rospy.core.is_initialized():
             rospy.init_node('hande_gripper_driver', anonymous=True)
         
-        # 모드 확인 (real or virtual)
+        # 모드 및 설정 가져오기
         self.mode = rospy.get_param('~mode', 'virtual')
-        self.port = rospy.get_param('~port', '/dev/ttyUSB0')
+        
+        # 실제 모드일 경우 호스트 및 포트 설정
+        if self.mode == 'real':
+            self.host = rospy.get_param('~host', 'localhost')
+            # 포트 값을 문자열에서 정수로 변환
+            self.port = int(rospy.get_param('~port', '63352'))
+        else:
+            self.host = 'localhost'
+            self.port = 0  # 가상 모드에서는 사용하지 않음
         
         rospy.loginfo(f"Hand-E 그리퍼 드라이버 시작: {self.mode} 모드")
         
-        # 실제 그리퍼 컨트롤러 (real 모드일 때만 사용)
+        # 그리퍼 컨트롤러 (실제 모드일 때만 사용)
         self.gripper = None
         
         if self.mode == 'real':
             try:
-                self.gripper = RobotiqHandEGripper(self.port)
+                self.gripper = RobotiqHandEDriver(self.host, self.port)
                 if not self.gripper.connect():
                     rospy.logwarn("실제 그리퍼 연결 실패, 가상 모드로 전환합니다")
                     self.mode = 'virtual'
+                else:
+                    # 그리퍼 활성화
+                    if not self.gripper.activate_gripper():
+                        rospy.logwarn("그리퍼 활성화 실패, 가상 모드로 전환합니다")
+                        self.mode = 'virtual'
             except Exception as e:
                 rospy.logerr(f"그리퍼 컨트롤러 초기화 오류: {e}")
                 self.mode = 'virtual'
@@ -444,13 +472,21 @@ class HandEGripperDriver:
         self.last_command_time = rospy.Time.now()
         self.last_status_update = rospy.Time.now()
         
-        # 그리퍼 정보 발행자
+        # 마지막 발행 위치 추적 변수
+        self.last_published_position = 0
+        self.last_published_status = 0
+        
+        # 그리퍼 메시지 관련 발행자 및 구독자
+        self.status_pub = rospy.Publisher('hande_gripper/status', HandEGripperStatus, queue_size=10)
+        self.cmd_sub = rospy.Subscriber('hande_gripper/command', HandEGripperCommand, self.command_callback)
+        
+        # 그리퍼 정보 발행자 (사용자 편의를 위한 추가 토픽)
         self.width_pub = rospy.Publisher('hande_gripper/width', Float64, queue_size=10)
         self.object_pub = rospy.Publisher('hande_gripper/object_detected', Bool, queue_size=10)
         self.moving_pub = rospy.Publisher('hande_gripper/moving', Bool, queue_size=10)
         self.position_pub = rospy.Publisher('hande_gripper/position', UInt8, queue_size=10)
         
-        # Joint State 발행자 - RViz 시각화
+        # Joint State 발행자 - RViz 시각화 (원래 형식으로 복원)
         self.joint_state_pub = rospy.Publisher('/joint_states', JointState, queue_size=10)
         
         # 서비스 서버
@@ -483,8 +519,10 @@ class HandEGripperDriver:
             status = self.gripper.get_status()
             
             if status:
-                # Robotiq 그리퍼는 0=열림, 255=닫힘이므로 ROS 표현(0.0=닫힘, 1.0=열림)으로 변환
-                self.position = 1.0 - (status['position'] / 255.0)
+                # 위치는 0=닫힘, 255=열림이 일반적이지만, ROS에서는 
+                # 일반적으로 0.0=열림, 1.0=닫힘을 사용하므로 변환
+                # Robotiq은 0=열림, 255=닫힘이므로 1.0 - (pos/255)로 변환
+                self.position = status['position'] / 255.0
                 self.activated = status['activated']
                 self.moving = status['moving']
                 self.object_detected = status['object_detected']
@@ -499,7 +537,7 @@ class HandEGripperDriver:
             return False
     
     def reset_gripper(self):
-        """그리퍼 초기화/리셋 - Modbus RTU 프로토콜 사용"""
+        """그리퍼 초기화/리셋"""
         if self.mode != 'real' or not self.gripper:
             # 가상 모드에서는 항상 성공한 것으로 처리
             rospy.loginfo("가상 모드에서 그리퍼 초기화 시뮬레이션")
@@ -521,7 +559,42 @@ class HandEGripperDriver:
         except Exception as e:
             rospy.logerr(f"그리퍼 초기화 중 오류 발생: {str(e)}")
             return False
-
+    
+    def command_callback(self, msg):
+        """그리퍼 명령 콜백 함수"""
+        # 활성화 명령 처리
+        if msg.rACT and not self.activated:
+            self.activated = True
+            if self.mode == 'real' and self.gripper:
+                self.gripper.activate_gripper()
+            rospy.loginfo("그리퍼 활성화")
+        elif not msg.rACT and self.activated:
+            self.activated = False
+            if self.mode == 'real' and self.gripper:
+                self.gripper._reset()
+            rospy.loginfo("그리퍼 비활성화")
+        
+        # 위치, 속도, 힘 명령 처리
+        if self.activated and msg.rGTO:
+            # GUI에서는 0(닫힘) ~ 255(열림) 방식으로 전달됨
+            # 내부 표현은 0(열림) ~ 1(닫힘)으로 유지
+            target_position = msg.rPR
+            internal_position = 1.0 - (target_position / 255.0)
+            
+            self.speed = msg.rSP
+            self.force = msg.rFR
+            
+            if self.mode == 'real' and self.gripper:
+                # 실제 그리퍼는 0(열림) ~ 255(닫힘) 방식을 사용하므로 변환 필요
+                self.gripper.send_command(target_position, self.speed, self.force)
+            else:
+                # 가상 모드에서는 이동 시뮬레이션 시작
+                self.target_position = internal_position
+                self.start_movement_simulation()
+            
+            self.moving = True
+            rospy.loginfo(f"이동 명령 수신: 위치={target_position} (내부: {internal_position:.2f}), 속도={self.speed}, 힘={self.force}")
+    
     def handle_control_service(self, req):
         """그리퍼 제어 서비스 핸들러"""
         response = GripperControlResponse()
@@ -531,18 +604,19 @@ class HandEGripperDriver:
             
             if req.command_type == 0:  # POSITION (0-255)
                 position_value = req.value
-                # 입력은 0-255 (0=닫힘, 255=열림) 범위지만 
-                # Robotiq은 0=열림, 255=닫힘이므로 변환 필요
-                robotiq_position = 255 - position_value
+                
+                # UI 값 반전: 0(닫힘) ~ 255(열림) → 내부 표현: 0(열림) ~ 1(닫힘)
+                internal_position = 1.0 - (position_value / 255.0)
                 
                 if self.mode == 'real' and self.gripper:
-                    success = self.gripper.send_command(robotiq_position, self.speed, self.force)
+                    # 실제 그리퍼는 0(열림) ~ 255(닫힘) 이므로 값을 그대로 사용
+                    success = self.gripper.send_command(position_value, self.speed, self.force)
                     if success:
-                        self.target_position = position_value / 255.0
+                        self.target_position = internal_position
                         self.moving = True
                 else:
                     success = True
-                    self.target_position = position_value / 255.0
+                    self.target_position = internal_position
                     self.start_movement_simulation()
                 
                 response.success = success
@@ -553,8 +627,8 @@ class HandEGripperDriver:
                 
                 if self.mode == 'real' and self.gripper:
                     # 속도만 변경하는 경우 현재 위치 유지
-                    robotiq_position = 255 - int(self.position * 255)
-                    success = self.gripper.send_command(robotiq_position, self.speed, self.force)
+                    position_value = int((1.0 - self.position) * 255)  # 방향 반전
+                    success = self.gripper.send_command(position_value, self.speed, self.force)
                 else:
                     success = True
                 
@@ -566,8 +640,8 @@ class HandEGripperDriver:
                 
                 if self.mode == 'real' and self.gripper:
                     # 힘만 변경하는 경우 현재 위치 유지
-                    robotiq_position = 255 - int(self.position * 255)
-                    success = self.gripper.send_command(robotiq_position, self.speed, self.force)
+                    position_value = int((1.0 - self.position) * 255)  # 방향 반전
+                    success = self.gripper.send_command(position_value, self.speed, self.force)
                 else:
                     success = True
                 
@@ -578,11 +652,12 @@ class HandEGripperDriver:
                 if self.mode == 'real' and self.gripper:
                     success = self.gripper.open_gripper()
                     if success:
-                        self.target_position = 1.0
+                        # 내부 표현에서는 열림이 0
+                        self.target_position = 0.0
                         self.moving = True
                 else:
                     success = True
-                    self.target_position = 1.0
+                    self.target_position = 0.0
                     self.start_movement_simulation()
                 
                 response.success = success
@@ -592,11 +667,12 @@ class HandEGripperDriver:
                 if self.mode == 'real' and self.gripper:
                     success = self.gripper.close_gripper()
                     if success:
-                        self.target_position = 0.0
+                        # 내부 표현에서는 닫힘이 1
+                        self.target_position = 1.0
                         self.moving = True
                 else:
                     success = True
-                    self.target_position = 0.0
+                    self.target_position = 1.0
                     self.start_movement_simulation()
                 
                 response.success = success
@@ -637,6 +713,7 @@ class HandEGripperDriver:
         if self.mode == 'real' and self.gripper:
             if (current_time - self.last_status_update).to_sec() >= 0.5:
                 self.update_real_gripper_state()
+        
         # 가상 모드 시뮬레이션
         elif self.mode == 'virtual' and self.movement_active:
             elapsed = (current_time - self.movement_start_time).to_sec()
@@ -650,9 +727,9 @@ class HandEGripperDriver:
                 self.moving = True
                 
                 # 물체 감지 시뮬레이션 (닫을 때만)
-                if self.target_position < 0.3 and self.position < 0.5:
+                if self.target_position > 0.7 and self.position > 0.5:
                     # 20% 확률로 물체 감지 시뮬레이션
-                    if not self.object_detected and rospy.Time.now().to_sec() % 10 < 2:
+                    if not self.object_detected and current_time.to_sec() % 10 < 2:
                         self.object_detected = True
                         rospy.loginfo("가상 물체 감지 시뮬레이션: 물체 감지됨")
             else:
@@ -662,7 +739,7 @@ class HandEGripperDriver:
                 self.movement_active = False
                 
                 # 완전히 열리면 물체 감지 해제
-                if self.position > 0.9:
+                if self.position < 0.1:
                     self.object_detected = False
         
         # 그리퍼 정보 발행
@@ -679,26 +756,59 @@ class HandEGripperDriver:
         
         # 위치 값을 미터 단위로 변환
         max_width = 0.050  # 최대 열림 폭 50mm = 0.050m
-        width = self.position * max_width
+        # 위치는 0(닫힘)~1(열림) 로직 표현, width는 물리적 거리(m)
+        width = (1.0 - self.position) * max_width
         
         # 위치 값 (0-255)으로 변환
-        position_value = int(self.position * 255)
+        # UI와 일관성을 맞추기 위해 방향 반전: 0(닫힘)~255(열림)
+        position_value = int((1.0 - self.position) * 255)
         
         # 토픽 발행
         self.width_pub.publish(Float64(data=width))
         self.object_pub.publish(Bool(data=self.object_detected))
         self.moving_pub.publish(Bool(data=self.moving))
-        self.position_pub.publish(UInt8(data=position_value))
         
-        # Joint State 발행 (RViz 시각화용)
+        # position_pub는 그리퍼 UI와 연동되는 중요한 값이므로,
+        # 이동 중이거나 값이 크게 변경되었을 때만 발행
+        if self.moving or not hasattr(self, 'last_published_position') or abs(self.last_published_position - position_value) > 10:
+            self.position_pub.publish(UInt8(data=position_value))
+            self.last_published_position = position_value
+        
+        # 상태 메시지 생성 및 발행
+        status_msg = HandEGripperStatus()
+        status_msg.gACT = self.activated
+        status_msg.gGTO = self.moving
+        status_msg.gSTA = self.activated
+        
+        # 물체 감지 상태 설정
+        if not self.activated:
+            status_msg.gOBJ = 0
+        elif self.object_detected:
+            status_msg.gOBJ = 1
+        elif self.position >= 0.99:
+            status_msg.gOBJ = 3  # 최대 닫힘 위치 도달
+        elif self.position <= 0.01:
+            status_msg.gOBJ = 2  # 최대 열림 위치 도달
+        else:
+            status_msg.gOBJ = 0  # 이동 중
+        
+        status_msg.gFLT = 0  # 결함 없음
+        status_msg.gPR = int((1.0 - self.target_position) * 255)  # 방향 반전
+        status_msg.gPO = position_value
+        status_msg.gCU = int(0.5 * 255) if self.moving else int(0.1 * 255)  # 이동 중일 때 가상 전류값 설정
+        
+        # 상태 발행 - 이동 중이거나 값이 크게 변경되었을 때만 발행
+        if self.moving or not hasattr(self, 'last_published_status') or abs(self.last_published_status - position_value) > 10:
+            self.status_pub.publish(status_msg)
+            self.last_published_status = position_value
+        
+        # 조인트 상태 발행 (시각화를 위해) - JointState 메시지로 변경
         joint_state = JointState()
         joint_state.header.stamp = rospy.Time.now()
         joint_state.name = ['gripper_robotiq_hande_left_finger_joint', 'gripper_robotiq_hande_right_finger_joint']
         
         # 관절 위치는 대칭적으로 움직이므로 양쪽에 같은 값
-        # ROS에서는 일반적으로 gripper_width/2가 손가락 위치
-        # width의 절반이 각 손가락의 움직임
-        finger_position = width / 2.0
+        finger_position = width / 2.0  # 핑거 한 쪽당 이동 거리
         joint_state.position = [finger_position, finger_position]
         
         # 속도와 힘은 옵션 (생략)
@@ -707,13 +817,6 @@ class HandEGripperDriver:
         
         # Joint State 발행
         self.joint_state_pub.publish(joint_state)
-        
-        # # 로깅 (5초에 한 번 정도)
-        # if int(rospy.Time.now().to_sec() * 10) % 50 == 0:
-        #     status_str = f"위치={self.position:.2f}, 너비={width*1000:.1f}mm"
-        #     status_str += f", 물체감지={'O' if self.object_detected else 'X'}"
-        #     status_str += f", 이동중={'O' if self.moving else 'X'}"
-        #     rospy.loginfo(f"그리퍼 상태: {status_str}")
     
     def run(self):
         """그리퍼 드라이버 실행"""
@@ -723,7 +826,7 @@ class HandEGripperDriver:
     def shutdown(self):
         """종료 처리"""
         if self.mode == 'real' and self.gripper:
-            self.gripper.close_connection()
+            self.gripper.disconnect()
         
         # 타이머 정지
         if self.update_timer is not None:

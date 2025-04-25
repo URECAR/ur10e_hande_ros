@@ -3,23 +3,25 @@
   <arg name="use_cpp_driver" default="false" doc="파이썬 대신 C++ 드라이버 사용 여부"/>
   <arg name="sim" default="true" doc="시뮬레이션 모드 여부"/>
   <arg name="mode" default="virtual" doc="실행 모드 (virtual/real)"/>
-  <arg name="port" default="/dev/ttyUSB0" doc="실제 그리퍼 연결 시리얼 포트"/>
+  <arg name="host" default="192.168.20.35" doc="실제 그리퍼 연결된 로봇 IP 주소"/>
+  <arg name="port" default="63352" doc="실제 그리퍼 연결 소켓 포트"/>
   
   <!-- 파라미터 설정 -->
   <param name="simulate_object_detection" type="bool" value="$(eval mode == 'virtual')"/>
   <param name="gripper_mode" type="string" value="$(arg mode)"/>
-  <param name="gripper_port" type="string" value="$(arg port)" if="$(eval mode == 'real')"/>
   
   <!-- 드라이버 노드 선택 -->
-  <group if="$(arg use_cpp_driver)">
+<!--   <group if="$(arg use_cpp_driver)">
     <node name="hande_gripper_driver" pkg="hande_bringup" type="hande_driver_node" output="screen">
       <param name="mode" value="$(arg mode)"/>
+      <param name="host" value="$(arg host)" if="$(eval mode == 'real')"/>
       <param name="port" value="$(arg port)" if="$(eval mode == 'real')"/>
     </node>
-  </group>
+  </group> -->
   <group unless="$(arg use_cpp_driver)">
     <node name="hande_gripper_driver" pkg="hande_bringup" type="hande_driver.py" output="screen">
       <param name="mode" value="$(arg mode)"/>
+      <param name="host" value="$(arg host)" if="$(eval mode == 'real')"/>
       <param name="port" value="$(arg port)" if="$(eval mode == 'real')"/>
     </node>
   </group>

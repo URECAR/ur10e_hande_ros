@@ -15,6 +15,7 @@ from ur_dashboard_msgs.msg import RobotMode
 
 # Import our new camera tab
 from test_package.camera_tab import CameraTab
+from test_package.multi_view_object_detection import MultiViewObjectDetectionTab
 
 class ClickableLabel(QLabel):
     """클릭 이벤트를 가진 QLabel"""
@@ -134,6 +135,8 @@ class URControlGUI(QMainWindow):
         """GUI 초기화 후 조인트 및 TCP 값을 입력 필드에 설정"""
         self.update_joint_inputs()
         self.update_tcp_inputs()
+        if hasattr(self, 'multi_view_tab'):
+            self.multi_view_tab.set_robot_controller(self.robot_controller)
 
     def init_ui(self):
         """UI 초기화"""
@@ -557,6 +560,11 @@ class URControlGUI(QMainWindow):
         camera_tab = CameraTab()
         self.tabs.addTab(camera_tab, "카메라")
         
+        # 다중 시점 물체 감지 탭 생성
+        self.multi_view_tab = MultiViewObjectDetectionTab()
+        self.tabs.addTab(self.multi_view_tab, "물체 인식")
+
+
         # 탭 위젯을 메인 레이아웃에 추가
         main_layout.addWidget(self.tabs)
         
@@ -1347,9 +1355,10 @@ class URControlGUI(QMainWindow):
         """탭이 변경될 때 호출되는 함수"""
         # 카메라 탭의 인덱스 확인 (일반적으로 마지막 탭)
         camera_tab_index = self.tabs.count() - 1
-        
-        if index == camera_tab_index:
-            # 카메라 탭으로 전환될 때 창 크기 확장
+        multi_view_tab_index = self.tabs.count() - 1  # 물체 인식 탭 인덱스
+
+        if index == camera_tab_index or index == multi_view_tab_index:
+            # 카메라 탭 또는 물체 인식 탭으로 전환될 때 창 크기 확장
             self.resize(self.camera_size)
         else:
             # 다른 탭으로 전환될 때 기본 크기로 복원

@@ -262,8 +262,6 @@ class PointCloudCaptureThread(QThread):
         """물체 감지 프로세스 실행 - 평면 기반 클러스터링 방식"""
         try:
             # 진행 상황 업데이트
-            # ... 나머지 코드
-            # 진행 상황 업데이트
             self.progress.emit(10, "포인트 클라우드 결합 중...")
             
             if not self.point_clouds:
@@ -506,6 +504,7 @@ class PointCloudCaptureThread(QThread):
             import traceback
             rospy.logerr(f"상세 오류: {traceback.format_exc()}")
             return []
+
 
     def run(self):
         """다양한 뷰에서 포인트 클라우드 캡처"""
@@ -1121,6 +1120,22 @@ class MultiViewObjectDetectionTab(QWidget):
             self.status_label.setText(f"{len(detected_objects)}개 물체 감지 완료")
         else:
             self.status_label.setText("감지된 물체 없음")
+            combined = o3d.geometry.PointCloud()
+            for pcd in self.point_clouds:
+                combined += pcd
+            combined = combined.voxel_down_sample(voxel_size=0.005)
+
+            # best_match 포인트만 별도 표시
+            geometries = [combined]
+            if detected_objects:
+                best = detected_objects[0]
+                cluster_pcd = o3d.geometry.PointCloud()
+                cluster_pcd.points = o3d.utility.Vector3dVector(best['points'])
+                cluster_pcd.paint_uniform_color([1, 0, 0])  # 빨강으로 강조
+                geometries.append(cluster_pcd)
+
+            # 비블록킹 윈도우로 한 번 띄우기
+            o3d.visualization.draw_geometries(geometries, window_name="Detected Points & Best Cluster")
     
     def on_detection_error(self, error_message):
         """감지 오류 처리"""

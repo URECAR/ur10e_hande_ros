@@ -3,6 +3,7 @@
   <arg name="robot_ip" doc="IP 주소 of the robot"/>
   <arg name="sim" default="false" doc="시뮬레이션 모드 여부"/>
   <arg name="mode" default="virtual" doc="그리퍼를 스폰하는 가상그리퍼 생성 / 실제 그리퍼에 연결"/>
+  <arg name="use_camera" default="true"/> 
   <!-- 키네마틱스 파일 경로 인자 추가 -->
   <arg name="kinematics_config" default="$(find ur_description)/config/ur10e/default_kinematics.yaml" doc="UR 로봇의 키네마틱스 구성 파일 경로"/>
 
@@ -22,6 +23,7 @@
   </include>
 
     <group if="$(eval mode == 'real')">
+      <group if="$(arg use_camera)">
         <include file="$(find realsense2_camera)/launch/rs_camera.launch">
             <arg name="enable_pointcloud" value="true"/>
             <arg name="align_depth" value="true"/>
